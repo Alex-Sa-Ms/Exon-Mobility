@@ -14,6 +14,11 @@ public class NodeId implements Serializable {
 		this.port = port;
 	}
 
+	public NodeId(InetAddress addr, int port) {
+		this.addr = addr;
+		this.port = port;
+	}
+
 	@Override
 	public int hashCode() {
 		return Objects.hash(addr, port);

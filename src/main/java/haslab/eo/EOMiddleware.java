@@ -39,8 +39,24 @@ public class EOMiddleware {
 		outData = new byte[MTUSize];
 	}
 
+	private EOMiddleware(String addr, int port) throws SocketException, UnknownHostException {
+		InetAddress address = InetAddress.getByName(addr);
+		sk = new DatagramSocket(port, address);
+		sk.setReceiveBufferSize(2000000000);
+		System.out.println("UDP DatagramSocket Created: " + port);
+		bb = ByteBuffer.allocate(MTUSize);
+		outData = new byte[MTUSize];
+	}
+
 	public static EOMiddleware start(int port) throws SocketException {
 		EOMiddleware eo = new EOMiddleware(port);
+		eo.new AlgoThread().start();
+		eo.new ReaderThread().start();
+		return eo;
+	}
+
+	public static EOMiddleware start(String address, int port) throws SocketException, UnknownHostException {
+		EOMiddleware eo = new EOMiddleware(address, port);
 		eo.new AlgoThread().start();
 		eo.new ReaderThread().start();
 		return eo;
