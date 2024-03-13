@@ -1,5 +1,6 @@
 package haslab.eo;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.*;
 
 import haslab.eo.events.*;
@@ -413,6 +414,7 @@ public class EOMiddleware {
 	}
 
 	public int calculatePReceiver() throws IOException, InterruptedException {
+		long startTime = System.currentTimeMillis();
 		int p = 0;
 		try (ServerSocket serverSocket = new ServerSocket(tcpPort)) {
 			System.out.println("Testing the network...");
@@ -444,10 +446,13 @@ public class EOMiddleware {
 			System.out.println("Server exception: " + ex.getMessage());
 			ex.printStackTrace();
 		}
+		long time = System.currentTimeMillis() - startTime;
+		System.out.println("Time to calculate P: " + time + "ms.");
 		return p;
 	}
 
 	public int calculatePSender(NodeId node) {
+		long startTime = System.currentTimeMillis();
 		String m = new String(new char[leng]).replace('\0', ' ');
 		int p = 0;
 
@@ -478,6 +483,9 @@ public class EOMiddleware {
 		} catch (IOException ex) {
 			System.out.println("I/O error: " + ex.getMessage());
 		}
+
+		long time = System.currentTimeMillis() - startTime;
+		System.out.println("Time to calculate P: " + time + "ms.");
 		return p;
 	}
 }
