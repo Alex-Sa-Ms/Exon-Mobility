@@ -120,6 +120,11 @@ public class EOMiddleware {
 		return new ClientMsg(m.node, m.msg);
 	}
 
+	public void close() {
+		//todo - close middleware
+		// terminate threads and close the socket
+	}
+
 	// public Msg receive(long timeout){
 	// return null;
 	// }
