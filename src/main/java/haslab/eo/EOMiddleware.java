@@ -1,6 +1,6 @@
 package haslab.eo;
 
-import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.*;
 
 import haslab.eo.events.*;
@@ -12,11 +12,16 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.nio.ByteBuffer;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class EOMiddleware {
+	private IdentifierToAddressBiMap assocMap = new IdentifierToAddressBiMap(); // map of associations. Associates node ids to transport addresses.
+	private ReadWriteLock assocLck = new ReentrantReadWriteLock(); // lock for operations related to associations
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
 	private BlockingQueue<DQMsg> deliveryQueue = new ArrayBlockingQueue<DQMsg>(1000000);
-	private ConcurrentHashMap<NodeId, SendRecord> sr = new ConcurrentHashMap<NodeId, SendRecord>();
+	private ConcurrentHashMap<String, SendRecord> sr = new ConcurrentHashMap<>();
+	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
 	private DatagramSocket sk;
 	int N, P;
 	private final int maxAcks = 1;
@@ -32,6 +37,8 @@ public class EOMiddleware {
 	private int leng = 1024;
 	private int N_Multiplier = 4;
 
+	/* ***** Initialization & Constructors ***** */
+	
 	private EOMiddleware(int port) throws SocketException {
 		sk = new DatagramSocket(port);
 		sk.setReceiveBufferSize(2000000000);
@@ -51,55 +58,155 @@ public class EOMiddleware {
 
 	public static EOMiddleware start(int port) throws SocketException {
 		EOMiddleware eo = new EOMiddleware(port);
-		eo.new AlgoThread().start();
 		eo.new ReaderThread().start();
 		return eo;
 	}
 
 	public static EOMiddleware start(String address, int port) throws SocketException, UnknownHostException {
 		EOMiddleware eo = new EOMiddleware(address, port);
-		eo.new AlgoThread().start();
 		eo.new ReaderThread().start();
 		return eo;
 	}
 
-	public MsgId send(NodeId node, byte[] msg) throws InterruptedException, IOException {
+	/* ***** Identifiers and transport addresses ***** */
+	
+	private static String createIdFromAddress(TransportAddress taddr){
+		if(taddr == null)
+			throw new RuntimeException(new NullPointerException("Cannot create an id from a null address."));
+		return taddr.addr.getHostAddress() + ":" + taddr.port;
+	}
+
+	public void associateIdToAddress(String nodeId, TransportAddress taddr){
+		// TODO - associate id to address (needs to change the keys in the records structures)
+		try{
+			this.assocLck.writeLock().lock();
+
+			// finds previous associations
+			String prevId = assocMap.getIdentifier(taddr);
+			TransportAddress prevAddr = assocMap.getAddress(nodeId);
+
+			// When multiple associations exist, only one will prevail.
+			// The one that prevails is the one associated with the
+			// given nodeId. This is because, a mobility scenario may
+			// have occurred, resulting in the creation of unwanted
+			// (send and/or receive) records. By fixing the association
+			// of node identifier to transport address, the appropriate
+			// flow of messages can be resumed. // Should the msgs of existing tokens
+			// and the msgs in the queue, of the send record that will be deleted
+			// added to the main record. Exon allows this, because the algorithm does not
+			// guarantee the order of messages. The only thing that needs to be assured is
+			// that messages cannot be returned when there is an association taking place.
+			// Should there be a map that maps orphan identifiers to the identifiers they were
+			// updated to, allowing messages to be properly delivered if the address is updated in
+			// the mid time? Is this mid time even possible if locks are used? Shouldn't the map also include
+			// orphan addresses? ANSWER all this questions.
+			// todo - only ack messages which sender clock is lower of equal to the slots interval?
+			// 		To avoid messages being discarded when they aren't appropriately delivered.
+			// todo - when sending messages, a search for a transport address will occur.
+			// 	If there isn't an association, the messages should be discarded.
+
+			// todo - what if the identifier already exists, needs to update the address only?
+			// 	make an assertion that only the address or the identifier may have an association,
+			//   there must not be two existent associations.
+			//	  Well, in mobility scenarios, both exist, so how to fix this?
+
+			// Finds records associated with the address's current identifier,
+			// and replaces the identifier of those records.
+			if(prevId != null){
+				ReceiveRecord rcvRec = rr.remove(prevId);
+				if(rcvRec != null)
+					rr.put(nodeId, rcvRec);
+
+				SendRecord sndRec = sr.remove(prevId);
+				if(sndRec != null)
+					sr.put(nodeId, sndRec);
+			}
+
+			// Creates the association, and removes any existent associations
+			assocMap.put(nodeId, taddr);
+		}finally {
+			this.assocLck.writeLock().unlock();
+		}
+	}
+	
+	
+	/* ***** Core functionality ***** */
+	
+	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
 		if (sendFirstTime) {
 			sendFirstTime = false;
-			P = calculatePSender(node);
+			P = calculatePSender(nodeId);
 			N = P * N_Multiplier;
 			System.out.println("P= " + P + ", N=" + N);
 			System.out.println("----------------------------------- \n");
 		}
-		SendRecord c = sr.get(node);
+		SendRecord c = sr.get(nodeId);
 		if (c != null)
 			c.sem.acquire();
 
-		AQMsg aqm = new AQMsg(node, new ClientMsg(node, msg));
+		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg));
 		algoQueue.put(aqm);
-		return null; // so far
+		return null;  // does not return message id yet
 	}
 
-	private boolean netSend(NodeId node, NetMsg m) throws IOException, InterruptedException {
+	public MsgId send(TransportAddress taddr, byte[] msg) throws InterruptedException, IOException{
+		String nodeId = assocMap.getIdentifier(taddr);
+
+		// creates a node identifier for the transport address
+		// if there isn't one registered yet.
+		if(nodeId == null){
+			nodeId = createIdFromAddress(taddr);
+			assocMap.put(nodeId, taddr);
+		}
+
+		return send(nodeId, msg);
+	}
+
+	public void debugPrints(){
+		System.out.println("----------- SendRecords -----------");
+		for (var entry : sr.entrySet()) {
+			System.out.println("receiver: " + entry.getKey());
+			System.out.println("msg queue: " + entry.getValue().msg);
+			System.out.println("tokens: " + entry.getValue().tok);
+		}
+		System.out.println("\n----------- ReceiveRecords -----------");
+		for (var entry : rr.entrySet()) {
+			System.out.println("sender: " + entry.getKey());
+			System.out.println("record: " + entry.getValue());
+			System.out.println("slots is empty?:" + entry.getValue().slt.isEmpty());
+		}
+	}
+
+	private boolean netSend(String nodeId, NetMsg m) throws IOException, InterruptedException {
 
 		bb = ByteBuffer.wrap(outData);
 		if (m instanceof ReqSlotsMsg) {
 			ReqSlotsMsg rsm = (ReqSlotsMsg) m;
 			bb.putInt(REQSLOT).putLong(rsm.s).putLong(rsm.n).putLong(rsm.l).putDouble(rsm.RTT);
+			System.out.println("Sent REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") to " + nodeId);
 		} else if (m instanceof SlotsMsg) {
 			SlotsMsg sm = (SlotsMsg) m;
 			bb.putInt(SLOT).putLong(sm.s).putLong(sm.r).putLong(sm.n);
+			System.out.println("Sent SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") to " + nodeId);
 		} else if (m instanceof TokenMsg) {
 			TokenMsg tm = (TokenMsg) m;
 			bb.putInt(TOKEN).putLong(tm.s).putLong(tm.r).put(tm.payload);
+			System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + nodeId);
 		} else if (m instanceof AcksMsg) {
+			String print;
 			AcksMsg am = (AcksMsg) m;
 			bb.putInt(ACK);
 			bb.putLong(am.r);
-			for (int i = 0; i < am.acks.size(); i++)
+			print = "Sent ACK (r=" + am.r;
+			for (int i = 0; i < am.acks.size(); i++) {
 				bb.putLong(am.acks.get(i));
+				print += ", " + am.acks.get(i);
+			}
+			print += ") to " + nodeId;
+			System.out.println(print);
 		}
-		DatagramPacket sendPacket = new DatagramPacket(outData, bb.position(), node.addr, node.port);
+		TransportAddress taddr = assocMap.getAddress(nodeId);
+		DatagramPacket sendPacket = new DatagramPacket(outData, bb.position(), taddr.addr, taddr.port);
 		sk.send(sendPacket);
 		return true;
 	}
@@ -117,7 +224,7 @@ public class EOMiddleware {
 			}
 		}
 		DQMsg m = deliveryQueue.take();
-		return new ClientMsg(m.node, m.msg);
+		return new ClientMsg(m.nodeId, m.msg);
 	}
 
 	public void close() {
@@ -125,14 +232,14 @@ public class EOMiddleware {
 		// terminate threads and close the socket
 	}
 
+	// todo - receive with timeout
 	// public Msg receive(long timeout){
 	// return null;
 	// }
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
-		private NodeId j;
-		private HashMap<NodeId, ReceiveRecord> rr = new HashMap<NodeId, ReceiveRecord>();
+		private String j;
 		private PriorityQueue<Event> pq = new PriorityQueue<Event>(100000, new TimeComparator());
 		private long timeout, currentTime;
 		private int slotsTimeout = 50000;
@@ -158,7 +265,7 @@ public class EOMiddleware {
 					currentTime = System.currentTimeMillis();
 
 					if (m != null) {
-						j = m.node;
+						j = m.nodeId;
 
 						if (m.msg instanceof ClientMsg) {// Client message received
 							ClientMsg eom = (ClientMsg) m.msg;
@@ -244,9 +351,11 @@ public class EOMiddleware {
 							long r = rm.r;
 							byte[] msg = rm.payload;
 							ReceiveRecord c = rr.get(j);
+							System.out.println("Token Received: "+ rm + "| ReceiveRecord: (" + c + ")");
 							if ((c != null) && (r == c.rck)) {
 								if (c.slt.contains(s)) {
 									if (deliveryQueue.offer(new DQMsg(j, msg))) { // deliver(msg)
+										System.out.println("Message added to delivery queue.");
 										c.slt.remove(s);
 										sendAck(j, c, s, r, msgTimeout(currentTime, receiverRTT, acksMultiplier));
 									}
@@ -278,7 +387,7 @@ public class EOMiddleware {
 							break;
 
 						pq.poll();
-						NodeId j = eve.node;
+						String j = eve.nodeId;
 
 						if (eve instanceof ReqSlotsEvent) {
 							ReqSlotsEvent rse = (ReqSlotsEvent) eve;
@@ -302,13 +411,16 @@ public class EOMiddleware {
 							if (!tr.acked) {
 								SendRecord c = sr.get(j);
 								if (c != null) {
+									System.out.println("c.rck:" + c.rck + " | tr.r" + tr.r + " | c.rck == tr.r : " + (c.rck == tr.r));
 									if ((c.rck == tr.r) && (c.tok.containsKey(tr.s))) {
-										System.out.println("Re-transmitting: " + retransmit++);
+										if(retransmit % 20 == 0)
+											System.out.println("Re-transmitting: " + retransmit);
+										retransmit++;
 										pq.add(new TokenEvent(j, tr,
 												msgTimeout(currentTime, c.RTT, tokenMultiplier * 3)));
 										netSend(j, new TokenMsg(j, tr.s, tr.r, tr.m));
 									}
-								}
+								}else System.out.println("c == null");
 							}
 						} else if (eve instanceof AcksEvent) {
 							AcksEvent ae = (AcksEvent) eve;
@@ -327,7 +439,7 @@ public class EOMiddleware {
 			}
 		}
 
-		public void requestSlots(NodeId j) {
+		public void requestSlots(String j) {
 			SendRecord c = sr.get(j);
 			long n = N + c.msg.size() - c.envelopes.size();
 
@@ -344,7 +456,10 @@ public class EOMiddleware {
 					c.reqSlotsTime = currentTime;
 					pq.add(new ReqSlotsEvent(j, msgTimeout(currentTime, c.RTT, reqSlotsMultiplier), currentTime));
 					netSend(j, new ReqSlotsMsg(j, c.sck, n, e, c.RTT));
-				} else if (c.tok.size() == 0 && c.msg.size() == 0) {
+				}
+				// There are no messages and the number of envelopes equals N (base number of slots that should be requested)
+				else if (c.tok.size() == 0 && c.msg.size() == 0) {
+					// todo - if this msg does not arrive, the receiver record will hang forever
 					netSend(j, new ReqSlotsMsg(j, c.sck, 0, c.sck, c.RTT));
 					ck = Math.max(ck, c.sck);
 					sr.remove(j);
@@ -358,7 +473,7 @@ public class EOMiddleware {
 			return (long) Math.min(UBOUND, Math.max(LBOUND, (multiplier * RTT))) + currentTime;
 		}
 
-		public void sendAck(NodeId j, ReceiveRecord c, long s, long r, long acksTimeout)
+		public void sendAck(String j, ReceiveRecord c, long s, long r, long acksTimeout)
 				throws IOException, InterruptedException {
 			if (c != null) {
 				if (c.acks.isEmpty()) {
@@ -389,27 +504,49 @@ public class EOMiddleware {
 					sk.receive(in_pkt);
 					b = ByteBuffer.wrap(incomingData, 0, in_pkt.getLength());
 					int msgType = b.getInt();
-					NodeId node = new NodeId(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
+					TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
+					String nodeId = assocMap.getIdentifier(taddr);
 
-					if (msgType == REQSLOT)
-						m = new ReqSlotsMsg(node, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
-					else if (msgType == SLOT)
-						m = new SlotsMsg(node, b.getLong(), b.getLong(), b.getLong());
-					else if (msgType == TOKEN) {
+					// Transport address is not yet registered
+					if(nodeId == null){
+						// creates a node identifier using the transport address
+						nodeId = createIdFromAddress(taddr);
+						assocMap.put(nodeId, taddr);
+					}
+
+					if (msgType == REQSLOT) {
+						ReqSlotsMsg rsm = new ReqSlotsMsg(nodeId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
+						m = rsm;
+						System.out.println("Received REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") from " + nodeId);
+					}else if (msgType == SLOT) {
+						SlotsMsg sm = new SlotsMsg(nodeId, b.getLong(), b.getLong(), b.getLong());
+						m = sm;
+						System.out.println("Received SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") from " + nodeId);
+					}else if (msgType == TOKEN) {
 						long s = b.getLong();
 						long r = b.getLong();
 						byte[] payload = new byte[b.remaining()];
 						b.get(payload);
-						m = new TokenMsg(node, s, r, payload);
+						TokenMsg tm = new TokenMsg(nodeId, s, r, payload);
+						m = tm;
+						System.out.println("Received TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") from " + nodeId);
 					} else if (msgType == ACK) {
 						ArrayList<Long> acks = new ArrayList<Long>();
 						long r = b.getLong();
 						int numAcks = b.remaining() / 8;
 						for (int i = 0; i < numAcks; i++)
 							acks.add(b.getLong());
-						m = new AcksMsg(node, acks, r);
+						AcksMsg am = new AcksMsg(nodeId, acks, r);
+						m = am;
+
+						String print = "Received ACK (r=" + am.r;
+						for (int i = 0; i < am.acks.size(); i++) {
+							print += ", " + am.acks.get(i);
+						}
+						print += ") from " + nodeId;
+						System.out.println(print);
 					}
-					AQMsg aqm = new AQMsg(node, m);
+					AQMsg aqm = new AQMsg(nodeId, m);
 					algoQueue.put(aqm);
 				}
 			} catch (Exception e) {
@@ -418,6 +555,7 @@ public class EOMiddleware {
 		}
 	}
 
+	// todo - correr noutra thread para dar update aos valores dos slots e controlo de fluxo?
 	public int calculatePReceiver() throws IOException, InterruptedException {
 		long startTime = System.currentTimeMillis();
 		int p = 0;
@@ -456,12 +594,15 @@ public class EOMiddleware {
 		return p;
 	}
 
-	public int calculatePSender(NodeId node) {
+	public int calculatePSender(String nodeId) {
 		long startTime = System.currentTimeMillis();
 		String m = new String(new char[leng]).replace('\0', ' ');
 		int p = 0;
 
-		try (Socket socket = new Socket(node.addr.getHostAddress(), tcpPort)) {
+		TransportAddress taddr = assocMap.getAddress(nodeId);
+		assert taddr != null;
+
+		try (Socket socket = new Socket(taddr.addr.getHostAddress(), tcpPort)) {
 			System.out.println("Testing the network...");
 			OutputStream output = socket.getOutputStream();
 			PrintWriter writer = new PrintWriter(output, true);

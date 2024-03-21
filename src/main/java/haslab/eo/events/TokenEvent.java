@@ -1,13 +1,13 @@
 package haslab.eo.events;
 
-import haslab.eo.NodeId;
+
 import haslab.eo.TokenRecord;
 
 public final class TokenEvent extends Event {
 	public final TokenRecord t;
 
-	public TokenEvent(NodeId node, TokenRecord t, long time) {
-		super(node, time);
+	public TokenEvent(String nodeId, TokenRecord t, long time) {
+		super(nodeId, time);
 		this.t = t;
 	}
 

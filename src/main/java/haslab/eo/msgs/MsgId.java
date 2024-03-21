@@ -1,13 +1,13 @@
 package haslab.eo.msgs;
 
-import haslab.eo.NodeId;
+
 
 public class MsgId {
-	public final NodeId node;
+	public final String nodeId;
 	public final long clock;
 
-	public MsgId(NodeId node, long clock) {
-		this.node = node;
+	public MsgId(String nodeId, long clock) {
+		this.nodeId = nodeId;
 		this.clock = clock;
 	}
 }
