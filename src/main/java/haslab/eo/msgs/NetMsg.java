@@ -5,8 +5,9 @@ import java.io.Serializable;
 
 
 public class NetMsg extends Msg implements Serializable {
-	String nodeId;
-	public NetMsg(String nodeId) {
-		this.nodeId = nodeId;
+	String srcId;
+	String destId;
+	public NetMsg(String srcId, String destId) {
+		this.srcId = srcId;
 	}
 }

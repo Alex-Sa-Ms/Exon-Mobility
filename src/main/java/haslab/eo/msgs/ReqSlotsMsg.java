@@ -6,8 +6,8 @@ public class ReqSlotsMsg extends NetMsg {
 	public final long s, n, l;
 	public double RTT;
 
-	public ReqSlotsMsg(String nodeId, long s, long n, long l, double RTT) {
-		super(nodeId);
+	public ReqSlotsMsg(String srcId, String destId, long s, long n, long l, double RTT) {
+		super(srcId, destId);
 		this.s = s;
 		this.n = n;
 		this.l = l;

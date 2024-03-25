@@ -159,21 +159,21 @@ public class EOMiddleware {
 		}
 	}
 
-	private boolean netSend(String nodeId, NetMsg m) throws IOException, InterruptedException {
+	private boolean netSend(String destId, NetMsg m) throws IOException, InterruptedException {
 
 		bb = ByteBuffer.wrap(outData);
 		if (m instanceof ReqSlotsMsg) {
 			ReqSlotsMsg rsm = (ReqSlotsMsg) m;
 			bb.putInt(REQSLOT).putLong(rsm.s).putLong(rsm.n).putLong(rsm.l).putDouble(rsm.RTT);
-			System.out.println("Sent REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") to " + nodeId);
+			System.out.println("Sent REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") to " + destId);
 		} else if (m instanceof SlotsMsg) {
 			SlotsMsg sm = (SlotsMsg) m;
 			bb.putInt(SLOT).putLong(sm.s).putLong(sm.r).putLong(sm.n);
-			System.out.println("Sent SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") to " + nodeId);
+			System.out.println("Sent SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") to " + destId);
 		} else if (m instanceof TokenMsg) {
 			TokenMsg tm = (TokenMsg) m;
 			bb.putInt(TOKEN).putLong(tm.s).putLong(tm.r).put(tm.payload);
-			System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + nodeId);
+			System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + destId);
 		} else if (m instanceof AcksMsg) {
 			String print;
 			AcksMsg am = (AcksMsg) m;
@@ -184,10 +184,10 @@ public class EOMiddleware {
 				bb.putLong(am.acks.get(i));
 				print += ", " + am.acks.get(i);
 			}
-			print += ") to " + nodeId;
+			print += ") to " + destId;
 			System.out.println(print);
 		}
-		TransportAddress taddr = assocMap.getAddress(nodeId);
+		TransportAddress taddr = assocMap.getAddress(destId);
 		DatagramPacket sendPacket = new DatagramPacket(outData, bb.position(), taddr.addr, taddr.port);
 		sk.send(sendPacket);
 		return true;
@@ -486,6 +486,15 @@ public class EOMiddleware {
 					sk.receive(in_pkt);
 					b = ByteBuffer.wrap(incomingData, 0, in_pkt.getLength());
 					int msgType = b.getInt();
+
+					// TODO - get source id and dest id from buffer
+					String srcId;
+					String destId;
+
+					// Checks if this destination of the message matches the node identifier
+					// TODO - check destination
+
+
 					TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
 					String nodeId = assocMap.getIdentifier(taddr);
 

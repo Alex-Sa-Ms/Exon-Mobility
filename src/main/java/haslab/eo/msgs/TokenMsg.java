@@ -9,8 +9,8 @@ public class TokenMsg extends NetMsg {
 	public final long s, r;
 	public byte[] payload;
 
-	public TokenMsg(String nodeId, long s, long r, byte[] payload) {
-		super(nodeId);
+	public TokenMsg(String srcId, String destId, long s, long r, byte[] payload) {
+		super(srcId, destId);
 		this.s = s;
 		this.r = r;
 		this.payload = payload;
@@ -22,7 +22,8 @@ public class TokenMsg extends NetMsg {
 				"s=" + s +
 				", r=" + r +
 				", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(payload)) +
-				", nodeId='" + nodeId + '\'' +
+				", srcId='" + srcId + '\'' +
+				", destId='" + destId + '\'' +
 				'}';
 	}
 }

@@ -8,8 +8,8 @@ public class AcksMsg extends NetMsg {
 	public final long r;
 	public final ArrayList<Long> acks; 
 	
-	public AcksMsg(String nodeId, ArrayList<Long> acks, long r) {
-		super(nodeId);
+	public AcksMsg(String srcId, String destId, ArrayList<Long> acks, long r) {
+		super(srcId, destId);
 		this.acks = acks;
 		this.r = r;
 	}
