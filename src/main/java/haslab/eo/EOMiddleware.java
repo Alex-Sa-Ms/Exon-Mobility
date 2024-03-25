@@ -5,7 +5,7 @@ import java.util.concurrent.*;
 
 import haslab.eo.events.*;
 import haslab.eo.msgs.*;
-import java.util.HashMap;
+
 import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
@@ -76,39 +76,21 @@ public class EOMiddleware {
 		return taddr.addr.getHostAddress() + ":" + taddr.port;
 	}
 
+	// TODO - when receiving a message, the table of associations should be updated if necessary.
+	//		The message may come from a new endpoint, therefore, the association needs to be updated
+	//		for the send operations to be successful.
+	// TODO - when sending messages, a search for a transport address will occur.
+	// 	If there isn't an association, the operation should be postponed.
+	// TODO - Change of identity is not supported, therefore, if a new association has an address that overlaps with an existing association,
+	//  the oldest association should be discarded. Since changes in identity are not supported, the mapping of the records does not need to be updated.
+
 	public void associateIdToAddress(String nodeId, TransportAddress taddr){
-		// TODO - associate id to address (needs to change the keys in the records structures)
 		try{
 			this.assocLck.writeLock().lock();
 
 			// finds previous associations
 			String prevId = assocMap.getIdentifier(taddr);
 			TransportAddress prevAddr = assocMap.getAddress(nodeId);
-
-			// When multiple associations exist, only one will prevail.
-			// The one that prevails is the one associated with the
-			// given nodeId. This is because, a mobility scenario may
-			// have occurred, resulting in the creation of unwanted
-			// (send and/or receive) records. By fixing the association
-			// of node identifier to transport address, the appropriate
-			// flow of messages can be resumed. // Should the msgs of existing tokens
-			// and the msgs in the queue, of the send record that will be deleted
-			// added to the main record. Exon allows this, because the algorithm does not
-			// guarantee the order of messages. The only thing that needs to be assured is
-			// that messages cannot be returned when there is an association taking place.
-			// Should there be a map that maps orphan identifiers to the identifiers they were
-			// updated to, allowing messages to be properly delivered if the address is updated in
-			// the mid time? Is this mid time even possible if locks are used? Shouldn't the map also include
-			// orphan addresses? ANSWER all this questions.
-			// todo - only ack messages which sender clock is lower of equal to the slots interval?
-			// 		To avoid messages being discarded when they aren't appropriately delivered.
-			// todo - when sending messages, a search for a transport address will occur.
-			// 	If there isn't an association, the messages should be discarded.
-
-			// todo - what if the identifier already exists, needs to update the address only?
-			// 	make an assertion that only the address or the identifier may have an association,
-			//   there must not be two existent associations.
-			//	  Well, in mobility scenarios, both exist, so how to fix this?
 
 			// Finds records associated with the address's current identifier,
 			// and replaces the identifier of those records.
@@ -228,11 +210,11 @@ public class EOMiddleware {
 	}
 
 	public void close() {
-		//todo - close middleware
+		//TODO - close middleware
 		// terminate threads and close the socket
 	}
 
-	// todo - receive with timeout
+	// TODO - receive with timeout
 	// public Msg receive(long timeout){
 	// return null;
 	// }

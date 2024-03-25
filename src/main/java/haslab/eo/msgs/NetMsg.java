@@ -9,5 +9,4 @@ public class NetMsg extends Msg implements Serializable {
 	public NetMsg(String nodeId) {
 		this.nodeId = nodeId;
 	}
-
 }
