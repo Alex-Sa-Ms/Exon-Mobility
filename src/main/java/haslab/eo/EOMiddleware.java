@@ -1,6 +1,7 @@
 package haslab.eo;
 
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import java.util.concurrent.*;
 
 import haslab.eo.events.*;
@@ -16,19 +17,21 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class EOMiddleware {
-	private IdentifierToAddressBiMap assocMap = new IdentifierToAddressBiMap(); // map of associations. Associates node ids to transport addresses.
-	private ReadWriteLock assocLck = new ReentrantReadWriteLock(); // lock for operations related to associations
+	private final String id; // identifier of the node
+	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
+	// private ReadWriteLock assocLck = new ReentrantReadWriteLock(); // lock for operations related to associations
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
 	private BlockingQueue<DQMsg> deliveryQueue = new ArrayBlockingQueue<DQMsg>(1000000);
 	private ConcurrentHashMap<String, SendRecord> sr = new ConcurrentHashMap<>();
-	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
+	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>(); // TODO - move to the reader thread as a normal hash map
 	private DatagramSocket sk;
 	int N, P;
 	private final int maxAcks = 1;
 	private ByteBuffer bb;
 	private final int MTUSize = 1400;
 	private final int REQSLOT = 1, SLOT = 2, TOKEN = 3, ACK = 4;
-	private byte[] outData;
+	private final byte[] outData; // byte array used to send messages
+	private final int bbOffset; // marks where new data may start being written to the array. The node identifier and its length is written before this offset.
 	private boolean sendFirstTime = true, receiveFirstTime = true;
 	// for P calculations
 	private int tcpPort = 12121;
@@ -38,53 +41,94 @@ public class EOMiddleware {
 	private int N_Multiplier = 4;
 
 	/* ***** Initialization & Constructors ***** */
-	
-	private EOMiddleware(int port) throws SocketException {
-		sk = new DatagramSocket(port);
-		sk.setReceiveBufferSize(2000000000);
-		System.out.println("UDP DatagramSocket Created: " + port);
-		bb = ByteBuffer.allocate(MTUSize);
-		outData = new byte[MTUSize];
-	}
 
-	private EOMiddleware(String addr, int port) throws SocketException, UnknownHostException {
-		InetAddress address = InetAddress.getByName(addr);
+	private EOMiddleware(String identifier, String addr, int port) throws SocketException, UnknownHostException {
+		// TODO - find a better alternative that has an even smaller chance of collision
+		// If an identifier is not provided, a random UUID is created
+		this.id = identifier != null ? identifier : UUID.randomUUID().toString();
+
+		// if no bind address is provided, the wildcard address is used.
+		InetAddress address = addr != null ? InetAddress.getByName(addr) : null;
+
 		sk = new DatagramSocket(port, address);
 		sk.setReceiveBufferSize(2000000000);
-		System.out.println("UDP DatagramSocket Created: " + port);
-		bb = ByteBuffer.allocate(MTUSize);
+		System.out.println("UDP DatagramSocket Created: " + sk.getLocalAddress().getHostName() + ":" + sk.getLocalPort());
+
+		// bb = ByteBuffer.allocate(MTUSize); // TODO - why is this needed?
+		// allocates byte array and writes the identifier of the node (avoiding the need to write this for every msg)
 		outData = new byte[MTUSize];
+		bb = ByteBuffer.wrap(outData);
+		bb.putInt(this.id.length());
+		bb.put(this.id.getBytes());
+		bbOffset = Integer.BYTES + this.id.getBytes().length;
 	}
 
-	public static EOMiddleware start(int port) throws SocketException {
-		EOMiddleware eo = new EOMiddleware(port);
+	/**
+	 * Creates an instance of the middleware.
+	 * @param identifier Identifier of the node. Should be globally unique. If 'null' a random identifier is created.
+	 * @param address bind address. If 'null' the wildcard address is used.
+	 * @param port port number for the UDP socket.
+	 * @return instance of the middleware
+	 * @throws SocketException
+	 * @throws UnknownHostException
+	 */
+	public static EOMiddleware start(String identifier, String address, int port) throws SocketException, UnknownHostException {
+		EOMiddleware eo = new EOMiddleware(identifier, address, port);
+		eo.new AlgoThread().start();
 		eo.new ReaderThread().start();
 		return eo;
 	}
 
-	public static EOMiddleware start(String address, int port) throws SocketException, UnknownHostException {
-		EOMiddleware eo = new EOMiddleware(address, port);
-		eo.new ReaderThread().start();
-		return eo;
+	/**
+	 * Creates an instance of the middleware.
+	 * A random identifier is created for the socket (can be retrieved through the 'getIdentifier()' method)
+	 * @param port port number for the UDP socket.
+	 * @return instance of the middleware
+	 * @throws SocketException
+	 * @throws UnknownHostException
+	 */
+	public static EOMiddleware start(int port) throws SocketException, UnknownHostException {
+		return start(null, null, port);
 	}
 
-	/* ***** Identifiers and transport addresses ***** */
+	/* ***** Identifiers and endpoints ***** */
 	
-	private static String createIdFromAddress(TransportAddress taddr){
-		if(taddr == null)
-			throw new RuntimeException(new NullPointerException("Cannot create an id from a null address."));
-		return taddr.addr.getHostAddress() + ":" + taddr.port;
+	// TODO - create API to register and find associations
+	//		-> Create an interface for a source of associations (like a directory service)
+	//			-> May have a subscribe method with a callback associated that should be
+	//				executed, when an event occurs. Some possible events: "NEW_ASSOCIATION",
+	//				"UPDATED_ASSOCIATION", "REMOVED_ASSOCIATION", "ONLINE", "OFFLINE".
+
+	/**
+	 * Gets the identifier of the node itself.
+	 * @return identifier of the node itself.
+	 */
+	public String getIdentifier(){
+		return this.id;
 	}
 
-	// TODO - when receiving a message, the table of associations should be updated if necessary.
-	//		The message may come from a new endpoint, therefore, the association needs to be updated
-	//		for the send operations to be successful.
-	// TODO - when sending messages, a search for a transport address will occur.
-	// 	If there isn't an association, the operation should be postponed.
-	// TODO - Change of identity is not supported, therefore, if a new association has an address that overlaps with an existing association,
-	//  the oldest association should be discarded. Since changes in identity are not supported, the mapping of the records does not need to be updated.
+	/**
+	 * Gets the node identifier associated with the given transport address.
+	 * @param taddr transport address
+	 * @return the node identifier associated with the given transport address,
+	 * or 'null' if there is no such association.
+	 */
+	public String getIdentifier(TransportAddress taddr){
+		return assocMap.getIdentifier(taddr);
+	}
 
-	public void associateIdToAddress(String nodeId, TransportAddress taddr){
+	/**
+	 * Gets the transport address associated with the given node identifier.
+	 * @param nodeId node identifier
+	 * @return the transport address associated with the given node identifier,
+	 * or 'null' if there is no such association.
+	 */
+	public TransportAddress getTransportAddress(String nodeId){
+		return assocMap.getAddress(nodeId);
+	}
+	
+	/* // method when a lock external to the association map is used 
+	public void registerAssociation(String nodeId, TransportAddress taddr){
 		try{
 			this.assocLck.writeLock().lock();
 
@@ -110,7 +154,35 @@ public class EOMiddleware {
 			this.assocLck.writeLock().unlock();
 		}
 	}
-	
+	 */
+
+	/**
+	 * Creates an association between the given node id and a transport address.
+	 * Any existing associations related to the node id or the transport address,
+	 * are deleted before creating the new association.
+	 * @param nodeId identifier of a node
+	 * @param taddr transport address of a node
+	 */
+	public void registerAssociation(String nodeId, TransportAddress taddr) {
+		// finds previous associations
+		String prevId = assocMap.getIdentifier(taddr);
+		TransportAddress prevAddr = assocMap.getAddress(nodeId);
+
+		// Finds records associated with the address's current identifier,
+		// and replaces the identifier of those records.
+		if (prevId != null) {
+			ReceiveRecord rcvRec = rr.remove(prevId);
+			if (rcvRec != null)
+				rr.put(nodeId, rcvRec);
+
+			SendRecord sndRec = sr.remove(prevId);
+			if (sndRec != null)
+				sr.put(nodeId, sndRec);
+		}
+
+		// Creates the association, and removes any existent associations
+		assocMap.put(nodeId, taddr);
+	}
 	
 	/* ***** Core functionality ***** */
 	
@@ -131,19 +203,6 @@ public class EOMiddleware {
 		return null;  // does not return message id yet
 	}
 
-	public MsgId send(TransportAddress taddr, byte[] msg) throws InterruptedException, IOException{
-		String nodeId = assocMap.getIdentifier(taddr);
-
-		// creates a node identifier for the transport address
-		// if there isn't one registered yet.
-		if(nodeId == null){
-			nodeId = createIdFromAddress(taddr);
-			assocMap.put(nodeId, taddr);
-		}
-
-		return send(nodeId, msg);
-	}
-
 	public void debugPrints(){
 		System.out.println("----------- SendRecords -----------");
 		for (var entry : sr.entrySet()) {
@@ -160,8 +219,16 @@ public class EOMiddleware {
 	}
 
 	private boolean netSend(String destId, NetMsg m) throws IOException, InterruptedException {
+		// Wraps outData array, and sets the offset and length assuming
+		//  that the node identifier and its length are already present in the array.
+		bb = ByteBuffer.wrap(outData, bbOffset, MTUSize - bbOffset);
 
-		bb = ByteBuffer.wrap(outData);
+		// writes the identifier of the destination node
+		byte[] destIdBytes = destId.getBytes();
+		bb.putInt(destIdBytes.length);
+		bb.put(destIdBytes);
+
+		// Writes the data related to each specific message
 		if (m instanceof ReqSlotsMsg) {
 			ReqSlotsMsg rsm = (ReqSlotsMsg) m;
 			bb.putInt(REQSLOT).putLong(rsm.s).putLong(rsm.n).putLong(rsm.l).putDouble(rsm.RTT);
@@ -187,7 +254,12 @@ public class EOMiddleware {
 			print += ") to " + destId;
 			System.out.println(print);
 		}
+
+		// gets the transport address from the association map
 		TransportAddress taddr = assocMap.getAddress(destId);
+		if(taddr == null)
+			return false;
+
 		DatagramPacket sendPacket = new DatagramPacket(outData, bb.position(), taddr.addr, taddr.port);
 		sk.send(sendPacket);
 		return true;
@@ -263,7 +335,7 @@ public class EOMiddleware {
 									long e = c.envelopes.dequeue();
 									if (c.envelopes.size() == (N - 1))
 										requestSlots(j);
-									TokenMsg tm = new TokenMsg(j, e, c.rck, msg);
+									TokenMsg tm = new TokenMsg(id, j, e, c.rck, msg);
 									TokenRecord tr = new TokenRecord(j, e, c.rck, msg, currentTime);
 									c.tok.put(e, tr);
 									pq.add(new TokenEvent(j, tr, msgTimeout(currentTime, c.RTT, tokenMultiplier)));
@@ -292,7 +364,7 @@ public class EOMiddleware {
 									c.sck = s + n;
 								}
 								c.lastSlotsSendTime = currentTime;
-								netSend(j, new SlotsMsg(j, s, c.rck, n));
+								netSend(j, new SlotsMsg(id, j, s, c.rck, n));
 							} else {
 								c.slt.removeSmallerThan(l);
 							}
@@ -308,7 +380,7 @@ public class EOMiddleware {
 							SendRecord c = sr.get(j);
 
 							if (c == null) {
-								netSend(j, new ReqSlotsMsg(j, ck, 0, ck, 0));
+								netSend(j, new ReqSlotsMsg(id, j, ck, 0, ck, 0));
 							} else if (s == c.sck) {
 								// calculating RTT
 								long newRTT = currentTime - c.reqSlotsTime;
@@ -319,7 +391,7 @@ public class EOMiddleware {
 								while ((c.envelopes.size() != 0) && (c.msg.size() != 0)) {
 									long e = c.envelopes.dequeue();
 									byte[] msg = c.msg.poll();
-									TokenMsg tm = new TokenMsg(j, e, c.rck, msg);
+									TokenMsg tm = new TokenMsg(id, j, e, c.rck, msg);
 									TokenRecord tr = new TokenRecord(j, e, c.rck, msg, currentTime);
 									c.tok.put(e, tr);
 									pq.add(new TokenEvent(j, tr, msgTimeout(currentTime, c.RTT, tokenMultiplier)));
@@ -383,7 +455,7 @@ public class EOMiddleware {
 							if (c != null) {
 								if (se.lastSlotsSendTime != c.lastSlotsSendTime) {
 									c.lastSlotsSendTime = currentTime;
-									netSend(j, new SlotsMsg(j, c.sck, c.rck, 0));
+									netSend(j, new SlotsMsg(id, j, c.sck, c.rck, 0));
 								}
 								pq.add(new SlotsEvent(j, currentTime + slotsTimeout, c.lastSlotsSendTime));
 							}
@@ -400,7 +472,7 @@ public class EOMiddleware {
 										retransmit++;
 										pq.add(new TokenEvent(j, tr,
 												msgTimeout(currentTime, c.RTT, tokenMultiplier * 3)));
-										netSend(j, new TokenMsg(j, tr.s, tr.r, tr.m));
+										netSend(j, new TokenMsg(id, j, tr.s, tr.r, tr.m));
 									}
 								}else System.out.println("c == null");
 							}
@@ -409,7 +481,7 @@ public class EOMiddleware {
 							ReceiveRecord c = rr.get(j);
 							if (c != null) {
 								if ((c.oldestAck == ae.oldestAck) && (!c.acks.isEmpty())) {
-									netSend(j, new AcksMsg(j, c.acks, c.rck));
+									netSend(j, new AcksMsg(id, j, c.acks, c.rck));
 									c.acks.clear();
 								}
 							}
@@ -437,12 +509,13 @@ public class EOMiddleware {
 
 					c.reqSlotsTime = currentTime;
 					pq.add(new ReqSlotsEvent(j, msgTimeout(currentTime, c.RTT, reqSlotsMultiplier), currentTime));
-					netSend(j, new ReqSlotsMsg(j, c.sck, n, e, c.RTT));
+					netSend(j, new ReqSlotsMsg(id, j, c.sck, n, e, c.RTT));
 				}
 				// There are no messages and the number of envelopes equals N (base number of slots that should be requested)
 				else if (c.tok.size() == 0 && c.msg.size() == 0) {
-					// todo - if this msg does not arrive, the receiver record will hang forever
-					netSend(j, new ReqSlotsMsg(j, c.sck, 0, c.sck, c.RTT));
+					// todo - This msg that "nullifies" all slots at the receiver, is only sent once,
+					//  therefore if it does not arrives, the receiver record will hang forever.
+					netSend(j, new ReqSlotsMsg(id, j, c.sck, 0, c.sck, c.RTT));
 					ck = Math.max(ck, c.sck);
 					sr.remove(j);
 				}
@@ -464,15 +537,26 @@ public class EOMiddleware {
 				}
 				c.acks.add(s);
 				if (c.acks.size() == maxAcks) {
-					netSend(j, new AcksMsg(j, c.acks, r));
+					netSend(j, new AcksMsg(id, j, c.acks, r));
 					c.acks.clear();
 				}
 			} else {
 				ArrayList<Long> ack = new ArrayList<Long>();
 				ack.add(s);
-				netSend(j, new AcksMsg(j, ack, r));
+				netSend(j, new AcksMsg(id, j, ack, r));
 			}
 		}
+	}
+
+	private String readStringFromBuffer(ByteBuffer buff){
+		if(buff == null || buff.remaining() < Integer.BYTES)
+			return null;
+		int strLen = buff.getInt();
+		if(buff.remaining() < strLen)
+			return null;
+		byte[] strArray = new byte[strLen];
+		buff.get(strArray);
+		return new String(strArray);
 	}
 
 	class ReaderThread extends Thread {
@@ -485,60 +569,55 @@ public class EOMiddleware {
 					DatagramPacket in_pkt = new DatagramPacket(incomingData, incomingData.length);
 					sk.receive(in_pkt);
 					b = ByteBuffer.wrap(incomingData, 0, in_pkt.getLength());
+
+					String srcId = readStringFromBuffer(b);
+					String destId = readStringFromBuffer(b);
 					int msgType = b.getInt();
 
-					// TODO - get source id and dest id from buffer
-					String srcId;
-					String destId;
+					// Discards message if the destination id does not match the node id
+					// or if the source identifier is null
+					if(id.equals(destId) && srcId != null) {
+						// updates id to transport address association (required for messages to be forwarded correctly)
+						TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
+						// update is only performed if needed, as to not slow other threads by using a write lock
+						if(!taddr.equals(assocMap.getAddress(srcId)))
+							registerAssociation(srcId, taddr);
 
-					// Checks if this destination of the message matches the node identifier
-					// TODO - check destination
+						if (msgType == REQSLOT) {
+							ReqSlotsMsg rsm = new ReqSlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
+							m = rsm;
+							System.out.println("Received REQSLOTS (s=" + rsm.s + ", n=" + rsm.n + ", l=" + rsm.l + ", rtt=" + rsm.RTT + ") from " + srcId);
+						} else if (msgType == SLOT) {
+							SlotsMsg sm = new SlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong());
+							m = sm;
+							System.out.println("Received SLOTS (s=" + sm.s + ", r=" + sm.r + ", n=" + sm.n + ") from " + srcId);
+						} else if (msgType == TOKEN) {
+							long s = b.getLong();
+							long r = b.getLong();
+							byte[] payload = new byte[b.remaining()];
+							b.get(payload);
+							TokenMsg tm = new TokenMsg(srcId, destId, s, r, payload);
+							m = tm;
+							System.out.println("Received TOKEN (s=" + tm.s + ", r=" + tm.r + ", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") from " + srcId);
+						} else if (msgType == ACK) {
+							ArrayList<Long> acks = new ArrayList<Long>();
+							long r = b.getLong();
+							int numAcks = b.remaining() / 8;
+							for (int i = 0; i < numAcks; i++)
+								acks.add(b.getLong());
+							AcksMsg am = new AcksMsg(srcId, destId, acks, r);
+							m = am;
 
-
-					TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
-					String nodeId = assocMap.getIdentifier(taddr);
-
-					// Transport address is not yet registered
-					if(nodeId == null){
-						// creates a node identifier using the transport address
-						nodeId = createIdFromAddress(taddr);
-						assocMap.put(nodeId, taddr);
-					}
-
-					if (msgType == REQSLOT) {
-						ReqSlotsMsg rsm = new ReqSlotsMsg(nodeId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
-						m = rsm;
-						System.out.println("Received REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") from " + nodeId);
-					}else if (msgType == SLOT) {
-						SlotsMsg sm = new SlotsMsg(nodeId, b.getLong(), b.getLong(), b.getLong());
-						m = sm;
-						System.out.println("Received SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") from " + nodeId);
-					}else if (msgType == TOKEN) {
-						long s = b.getLong();
-						long r = b.getLong();
-						byte[] payload = new byte[b.remaining()];
-						b.get(payload);
-						TokenMsg tm = new TokenMsg(nodeId, s, r, payload);
-						m = tm;
-						System.out.println("Received TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") from " + nodeId);
-					} else if (msgType == ACK) {
-						ArrayList<Long> acks = new ArrayList<Long>();
-						long r = b.getLong();
-						int numAcks = b.remaining() / 8;
-						for (int i = 0; i < numAcks; i++)
-							acks.add(b.getLong());
-						AcksMsg am = new AcksMsg(nodeId, acks, r);
-						m = am;
-
-						String print = "Received ACK (r=" + am.r;
-						for (int i = 0; i < am.acks.size(); i++) {
-							print += ", " + am.acks.get(i);
+							String print = "Received ACK (r=" + am.r;
+							for (int i = 0; i < am.acks.size(); i++) {
+								print += ", " + am.acks.get(i);
+							}
+							print += ") from " + srcId;
+							System.out.println(print);
 						}
-						print += ") from " + nodeId;
-						System.out.println(print);
+						AQMsg aqm = new AQMsg(srcId, m);
+						algoQueue.put(aqm);
 					}
-					AQMsg aqm = new AQMsg(nodeId, m);
-					algoQueue.put(aqm);
 				}
 			} catch (Exception e) {
 				e.printStackTrace();
