@@ -65,9 +65,9 @@ public class EOMiddleware {
 
 	/**
 	 * Creates an instance of the middleware.
-	 * @param identifier Identifier of the node. Should be globally unique. If 'null' a random identifier is created.
+	 * @param identifier Identifier of the node itself. Should be globally unique. If 'null' a random identifier is created.
 	 * @param address bind address. If 'null' the wildcard address is used.
-	 * @param port port number for the UDP socket.
+	 * @param port local port number for the UDP socket.
 	 * @return instance of the middleware
 	 * @throws SocketException
 	 * @throws UnknownHostException
@@ -82,7 +82,7 @@ public class EOMiddleware {
 	/**
 	 * Creates an instance of the middleware.
 	 * A random identifier is created for the socket (can be retrieved through the 'getIdentifier()' method)
-	 * @param port port number for the UDP socket.
+	 * @param port local port number for the UDP socket.
 	 * @return instance of the middleware
 	 * @throws SocketException
 	 * @throws UnknownHostException
