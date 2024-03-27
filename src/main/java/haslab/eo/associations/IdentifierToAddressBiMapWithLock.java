@@ -1,4 +1,6 @@
-package haslab.eo;
+package haslab.eo.associations;
+
+import haslab.eo.TransportAddress;
 
 import java.util.HashMap;
 import java.util.Map;

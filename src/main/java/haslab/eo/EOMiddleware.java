@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.*;
 
+import haslab.eo.associations.IdentifierToAddressBiMapWithLock;
 import haslab.eo.events.*;
 import haslab.eo.msgs.*;
 
@@ -13,8 +14,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.nio.ByteBuffer;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class EOMiddleware {
 	private final String id; // identifier of the node
@@ -93,11 +92,7 @@ public class EOMiddleware {
 
 	/* ***** Identifiers and endpoints ***** */
 	
-	// TODO - create API to register and find associations
-	//		-> Create an interface for a source of associations (like a directory service)
-	//			-> May have a subscribe method with a callback associated that should be
-	//				executed, when an event occurs. Some possible events: "NEW_ASSOCIATION",
-	//				"UPDATED_ASSOCIATION", "REMOVED_ASSOCIATION", "ONLINE", "OFFLINE".
+	// TODO - integrate the AssociationSource
 
 	/**
 	 * Gets the identifier of the node itself.
