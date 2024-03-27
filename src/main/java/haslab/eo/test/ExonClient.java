@@ -2,6 +2,7 @@ package haslab.eo.test;
 
 import haslab.eo.EOMiddleware;
 import haslab.eo.TransportAddress;
+import haslab.eo.associations.CsvAssociationSource;
 import haslab.eo.msgs.ClientMsg;
 
 
@@ -36,16 +37,27 @@ public class ExonClient {
                 if (line.equals("debug"))
                     eoMiddleware.debugPrints();
                 else if (line.equals("association")) {
-                    System.out.println("Node Id:");
-                    String nodeId = scanner.nextLine();
-                    System.out.println("Address:");
-                    String newAddr = scanner.nextLine();
-                    System.out.println("Port:");
-                    int newPort = Integer.parseInt(scanner.nextLine());
-                    try {
-                        eoMiddleware.registerAssociation(nodeId, new TransportAddress(newAddr, newPort));
-                    } catch (UnknownHostException e) {
-                        throw new RuntimeException(e);
+                    System.out.print("Options:\n\t-> manual\n\t-> source\nAssociation command? ");
+                    line = scanner.nextLine();
+                    if(line.equals("manual")){
+                        System.out.println("Node Id:");
+                        String nodeId = scanner.nextLine();
+                        System.out.println("Address:");
+                        String newAddr = scanner.nextLine();
+                        System.out.println("Port:");
+                        int newPort = Integer.parseInt(scanner.nextLine());
+                        try {
+                            eoMiddleware.registerAssociation(nodeId, new TransportAddress(newAddr, newPort));
+                        } catch (UnknownHostException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } else if (line.equals("source")) {
+                        System.out.println("Filepath:");
+                        String filepath = scanner.nextLine();
+                        try {
+                            CsvAssociationSource src = CsvAssociationSource.create(filepath, ";");
+                            eoMiddleware.setAssociationSource(src);
+                        } catch (IOException ignored) {}
                     }
                 } else if (line.equals("send")) {
                     System.out.print("Destination Id: ");

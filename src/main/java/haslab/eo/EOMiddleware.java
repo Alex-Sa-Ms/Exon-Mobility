@@ -146,12 +146,12 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public void registerAssociation(String nodeId, TransportAddress taddr) {
 		// Creates the association, and removes any existent associations
-		assocMap.put(nodeId, taddr);
+		this.assocMap.put(nodeId, taddr);
 
 		// subscribes to the node's association events
 		// if the source of associations supports it
-		if(assocNotifier != null)
-			assocNotifier.subscribeToNode(this, nodeId);
+		if(this.assocNotifier != null)
+			this.assocNotifier.subscribeToNode(this, nodeId);
 	}
 
 	/**
@@ -161,8 +161,19 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @param source source of associations
 	 */
 	public void setAssociationSource(AssociationSource source){
+		// remove all subscriptions from the previous notifier
+		if(this.assocNotifier != null)
+			this.assocNotifier.unsubscribeFromAll(this);
+
+		// sets new association source
 		this.assocSrc = source;
+
+		// sets new association notifier
 		this.assocNotifier = source.getAssociationNotifier();
+
+		if(this.assocNotifier != null)
+			for (String nodeId : this.assocMap.getIdentifiers())
+				assocNotifier.subscribeToNode(this,nodeId);
 	}
 
 	/* ***** Association Subscriber functionality ***** */
@@ -240,15 +251,15 @@ public class EOMiddleware implements AssociationSubscriber {
 		if (m instanceof ReqSlotsMsg) {
 			ReqSlotsMsg rsm = (ReqSlotsMsg) m;
 			bb.putInt(REQSLOT).putLong(rsm.s).putLong(rsm.n).putLong(rsm.l).putDouble(rsm.RTT);
-			System.out.println("Sent REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") to " + destId);
+			//System.out.println("Sent REQSLOTS (s=" + rsm.s + ", n=" + rsm.n +", l=" + rsm.l + ", rtt=" + rsm.RTT + ") to " + destId);
 		} else if (m instanceof SlotsMsg) {
 			SlotsMsg sm = (SlotsMsg) m;
 			bb.putInt(SLOT).putLong(sm.s).putLong(sm.r).putLong(sm.n);
-			System.out.println("Sent SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") to " + destId);
+			//System.out.println("Sent SLOTS (s=" + sm.s + ", r=" + sm.r +", n=" + sm.n + ") to " + destId);
 		} else if (m instanceof TokenMsg) {
 			TokenMsg tm = (TokenMsg) m;
 			bb.putInt(TOKEN).putLong(tm.s).putLong(tm.r).put(tm.payload);
-			System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + destId);
+			//System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + destId);
 		} else if (m instanceof AcksMsg) {
 			String print;
 			AcksMsg am = (AcksMsg) m;
@@ -260,7 +271,7 @@ public class EOMiddleware implements AssociationSubscriber {
 				print += ", " + am.acks.get(i);
 			}
 			print += ") to " + destId;
-			System.out.println(print);
+			//System.out.println(print);
 		}
 
 		// gets the transport address from the association map
@@ -422,11 +433,11 @@ public class EOMiddleware implements AssociationSubscriber {
 							long r = rm.r;
 							byte[] msg = rm.payload;
 							ReceiveRecord c = rr.get(j);
-							System.out.println("Token Received: "+ rm + "| ReceiveRecord: (" + c + ")");
+							//System.out.println("Token Received: "+ rm + "| ReceiveRecord: (" + c + ")");
 							if ((c != null) && (r == c.rck)) {
 								if (c.slt.contains(s)) {
 									if (deliveryQueue.offer(new DQMsg(j, msg))) { // deliver(msg)
-										System.out.println("Message added to delivery queue.");
+										//System.out.println("Message added to delivery queue.");
 										c.slt.remove(s);
 										sendAck(j, c, s, r, msgTimeout(currentTime, receiverRTT, acksMultiplier));
 									}
@@ -482,16 +493,16 @@ public class EOMiddleware implements AssociationSubscriber {
 							if (!tr.acked) {
 								SendRecord c = sr.get(j);
 								if (c != null) {
-									System.out.println("c.rck:" + c.rck + " | tr.r" + tr.r + " | c.rck == tr.r : " + (c.rck == tr.r));
+									//System.out.println("c.rck:" + c.rck + " | tr.r" + tr.r + " | c.rck == tr.r : " + (c.rck == tr.r));
 									if ((c.rck == tr.r) && (c.tok.containsKey(tr.s))) {
 										if(retransmit % 20 == 0)
-											System.out.println("Re-transmitting: " + retransmit);
+											//System.out.println("Re-transmitting: " + retransmit);
 										retransmit++;
 										pq.add(new TokenEvent(j, tr,
 												msgTimeout(currentTime, c.RTT, tokenMultiplier * 3)));
 										netSend(j, new TokenMsg(id, j, tr.s, tr.r, tr.m));
 									}
-								}else System.out.println("c == null");
+								} //else System.out.println("c == null");
 							}
 						} else if (eve instanceof AcksEvent) {
 							AcksEvent ae = (AcksEvent) eve;
@@ -603,11 +614,11 @@ public class EOMiddleware implements AssociationSubscriber {
 						if (msgType == REQSLOT) {
 							ReqSlotsMsg rsm = new ReqSlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
 							m = rsm;
-							System.out.println("Received REQSLOTS (s=" + rsm.s + ", n=" + rsm.n + ", l=" + rsm.l + ", rtt=" + rsm.RTT + ") from " + srcId);
+							// System.out.println("Received REQSLOTS (s=" + rsm.s + ", n=" + rsm.n + ", l=" + rsm.l + ", rtt=" + rsm.RTT + ") from " + srcId);
 						} else if (msgType == SLOT) {
 							SlotsMsg sm = new SlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong());
 							m = sm;
-							System.out.println("Received SLOTS (s=" + sm.s + ", r=" + sm.r + ", n=" + sm.n + ") from " + srcId);
+							// System.out.println("Received SLOTS (s=" + sm.s + ", r=" + sm.r + ", n=" + sm.n + ") from " + srcId);
 						} else if (msgType == TOKEN) {
 							long s = b.getLong();
 							long r = b.getLong();
@@ -615,7 +626,7 @@ public class EOMiddleware implements AssociationSubscriber {
 							b.get(payload);
 							TokenMsg tm = new TokenMsg(srcId, destId, s, r, payload);
 							m = tm;
-							System.out.println("Received TOKEN (s=" + tm.s + ", r=" + tm.r + ", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") from " + srcId);
+							// System.out.println("Received TOKEN (s=" + tm.s + ", r=" + tm.r + ", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") from " + srcId);
 						} else if (msgType == ACK) {
 							ArrayList<Long> acks = new ArrayList<Long>();
 							long r = b.getLong();
@@ -630,7 +641,7 @@ public class EOMiddleware implements AssociationSubscriber {
 								print += ", " + am.acks.get(i);
 							}
 							print += ") from " + srcId;
-							System.out.println(print);
+							// System.out.println(print);
 						}
 						AQMsg aqm = new AQMsg(srcId, m);
 						algoQueue.put(aqm);
