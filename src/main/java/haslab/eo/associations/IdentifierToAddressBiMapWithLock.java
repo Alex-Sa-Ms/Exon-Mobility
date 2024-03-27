@@ -4,6 +4,7 @@ import haslab.eo.TransportAddress;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -78,6 +79,33 @@ public class IdentifierToAddressBiMapWithLock {
             idToAddrMap.remove(nodeId);
         }finally {
             this.lck.writeLock().unlock();
+        }
+    }
+
+    public Set<Map.Entry<String, TransportAddress>> entrySet(){
+        try{
+            this.lck.readLock().lock();
+            return idToAddrMap.entrySet();
+        }finally {
+            this.lck.readLock().unlock();
+        }
+    }
+
+    public Set<String> getIdentifiers(){
+        try{
+            this.lck.readLock().lock();
+            return idToAddrMap.keySet();
+        }finally {
+            this.lck.readLock().unlock();
+        }
+    }
+
+    public Set<TransportAddress> getAddresses(){
+        try{
+            this.lck.readLock().lock();
+            return addrToIdMap.keySet();
+        }finally {
+            this.lck.readLock().unlock();
         }
     }
 }

@@ -4,6 +4,7 @@ import haslab.eo.TransportAddress;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Should be used alongside locks to ensure consistency.
@@ -51,5 +52,17 @@ public class IdentifierToAddressBiMap {
         String nodeId = addrToIdMap.get(taddr);
         addrToIdMap.remove(taddr);
         idToAddrMap.remove(nodeId);
+    }
+
+    public Set<Map.Entry<String, TransportAddress>> entrySet() {
+        return idToAddrMap.entrySet();
+    }
+
+    public Set<String> getIdentifiers() {
+        return idToAddrMap.keySet();
+    }
+
+    public Set<TransportAddress> getAddresses() {
+        return addrToIdMap.keySet();
     }
 }

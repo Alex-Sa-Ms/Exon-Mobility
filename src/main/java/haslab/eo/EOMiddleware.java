@@ -4,7 +4,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.*;
 
+import haslab.eo.associations.AssociationNotifier;
+import haslab.eo.associations.AssociationSource;
+import haslab.eo.associations.AssociationSubscriber;
 import haslab.eo.associations.IdentifierToAddressBiMapWithLock;
+import haslab.eo.associations.events.*;
 import haslab.eo.events.*;
 import haslab.eo.msgs.*;
 
@@ -15,10 +19,15 @@ import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.nio.ByteBuffer;
 
-public class EOMiddleware {
+// TODO - should I create an interface that restricts the methods that can be called?
+//			Limit the methods to send, receive & close. Avoids invocation of methods like "notify"
+//			from classes that shouldn't call it.
+public class EOMiddleware implements AssociationSubscriber {
 	private final String id; // identifier of the node
 	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
 	// private ReadWriteLock assocLck = new ReentrantReadWriteLock(); // lock for operations related to associations
+	private AssociationSource assocSrc = null;
+	private AssociationNotifier assocNotifier = null;
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
 	private BlockingQueue<DQMsg> deliveryQueue = new ArrayBlockingQueue<DQMsg>(1000000);
 	private ConcurrentHashMap<String, SendRecord> sr = new ConcurrentHashMap<>();
@@ -91,8 +100,6 @@ public class EOMiddleware {
 	}
 
 	/* ***** Identifiers and endpoints ***** */
-	
-	// TODO - integrate the AssociationSource
 
 	/**
 	 * Gets the identifier of the node itself.
@@ -109,7 +116,10 @@ public class EOMiddleware {
 	 * or 'null' if there is no such association.
 	 */
 	public String getIdentifier(TransportAddress taddr){
-		return assocMap.getIdentifier(taddr);
+		String identifier = assocMap.getIdentifier(taddr);
+		if(identifier == null)
+			identifier = assocSrc.getIdentifier(taddr);
+		return identifier;
 	}
 
 	/**
@@ -119,66 +129,69 @@ public class EOMiddleware {
 	 * or 'null' if there is no such association.
 	 */
 	public TransportAddress getTransportAddress(String nodeId){
-		return assocMap.getAddress(nodeId);
+		TransportAddress taddr = assocMap.getAddress(nodeId);
+		if(taddr == null)
+			taddr = assocSrc.getTransportAddress(nodeId);
+		return taddr;
 	}
-	
-	/* // method when a lock external to the association map is used 
-	public void registerAssociation(String nodeId, TransportAddress taddr){
-		try{
-			this.assocLck.writeLock().lock();
-
-			// finds previous associations
-			String prevId = assocMap.getIdentifier(taddr);
-			TransportAddress prevAddr = assocMap.getAddress(nodeId);
-
-			// Finds records associated with the address's current identifier,
-			// and replaces the identifier of those records.
-			if(prevId != null){
-				ReceiveRecord rcvRec = rr.remove(prevId);
-				if(rcvRec != null)
-					rr.put(nodeId, rcvRec);
-
-				SendRecord sndRec = sr.remove(prevId);
-				if(sndRec != null)
-					sr.put(nodeId, sndRec);
-			}
-
-			// Creates the association, and removes any existent associations
-			assocMap.put(nodeId, taddr);
-		}finally {
-			this.assocLck.writeLock().unlock();
-		}
-	}
-	 */
 
 	/**
-	 * Creates an association between the given node id and a transport address.
+	 * Register, locally, an association between the given node id and a transport address.
 	 * Any existing associations related to the node id or the transport address,
 	 * are deleted before creating the new association.
+	 * If an association source that supports subscribing events related to the associations,
+	 * the events related to the specified node are subscribed.
 	 * @param nodeId identifier of a node
 	 * @param taddr transport address of a node
 	 */
 	public void registerAssociation(String nodeId, TransportAddress taddr) {
-		// finds previous associations
-		String prevId = assocMap.getIdentifier(taddr);
-		TransportAddress prevAddr = assocMap.getAddress(nodeId);
-
-		// Finds records associated with the address's current identifier,
-		// and replaces the identifier of those records.
-		if (prevId != null) {
-			ReceiveRecord rcvRec = rr.remove(prevId);
-			if (rcvRec != null)
-				rr.put(nodeId, rcvRec);
-
-			SendRecord sndRec = sr.remove(prevId);
-			if (sndRec != null)
-				sr.put(nodeId, sndRec);
-		}
-
 		// Creates the association, and removes any existent associations
 		assocMap.put(nodeId, taddr);
+
+		// subscribes to the node's association events
+		// if the source of associations supports it
+		if(assocNotifier != null)
+			assocNotifier.subscribeToNode(this, nodeId);
 	}
-	
+
+	/**
+	 * Sets source of associations. May be 'null'.
+	 * The association source is consulted when an
+	 * association is not found locally.
+	 * @param source source of associations
+	 */
+	public void setAssociationSource(AssociationSource source){
+		this.assocSrc = source;
+		this.assocNotifier = source.getAssociationNotifier();
+	}
+
+	/* ***** Association Subscriber functionality ***** */
+
+	@Override
+	public void notify(AssociationEvent ev) {
+		switch (ev){
+			case UpdatedAssociationEvent uae -> {
+				// creates/updates local association
+				this.assocMap.put(uae.nodeId, uae.taddr);
+			}
+			/*
+			// At the moment only the "updated association" event is supported.
+
+			// The online event is useful to update the association transport address,
+			//	and resume sending messages only when the node is detected as online
+			case OnlineEvent one -> {
+
+			}
+			// The offline event is useful to seize the action of sending messages
+			// temporarily while the node is seen as offline.
+			case OfflineEvent offe -> {
+
+			}
+			*/
+			default -> {}
+		}
+	}
+
 	/* ***** Core functionality ***** */
 	
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
@@ -251,7 +264,7 @@ public class EOMiddleware {
 		}
 
 		// gets the transport address from the association map
-		TransportAddress taddr = assocMap.getAddress(destId);
+		TransportAddress taddr = getTransportAddress(destId);
 		if(taddr == null)
 			return false;
 
@@ -266,8 +279,6 @@ public class EOMiddleware {
 			try {
 				P = calculatePReceiver();
 				N = P * N_Multiplier;
-				System.out.println("P= " + P + ", N=" + N);
-				System.out.println("----------------------------------- \n");
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
@@ -276,15 +287,26 @@ public class EOMiddleware {
 		return new ClientMsg(m.nodeId, m.msg);
 	}
 
+	public Msg receive(long timeout) throws InterruptedException{
+		if (receiveFirstTime) {
+			receiveFirstTime = false;
+			try {
+				P = calculatePReceiver();
+				N = P * N_Multiplier;
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+        DQMsg m = deliveryQueue.poll(timeout, TimeUnit.MILLISECONDS);
+		if(m != null)
+			return new ClientMsg(m.nodeId, m.msg);
+		return null;
+	}
+
 	public void close() {
 		//TODO - close middleware
 		// terminate threads and close the socket
 	}
-
-	// TODO - receive with timeout
-	// public Msg receive(long timeout){
-	// return null;
-	// }
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
@@ -575,8 +597,8 @@ public class EOMiddleware {
 						// updates id to transport address association (required for messages to be forwarded correctly)
 						TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
 						// update is only performed if needed, as to not slow other threads by using a write lock
-						if(!taddr.equals(assocMap.getAddress(srcId)))
-							registerAssociation(srcId, taddr);
+						if(!taddr.equals(getTransportAddress(srcId)))
+							assocMap.put(srcId, taddr);
 
 						if (msgType == REQSLOT) {
 							ReqSlotsMsg rsm = new ReqSlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
@@ -664,7 +686,7 @@ public class EOMiddleware {
 		String m = new String(new char[leng]).replace('\0', ' ');
 		int p = 0;
 
-		TransportAddress taddr = assocMap.getAddress(nodeId);
+		TransportAddress taddr = getTransportAddress(nodeId);
 		assert taddr != null;
 
 		try (Socket socket = new Socket(taddr.addr.getHostAddress(), tcpPort)) {
