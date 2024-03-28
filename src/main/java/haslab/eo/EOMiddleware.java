@@ -117,8 +117,21 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public String getIdentifier(TransportAddress taddr){
 		String identifier = assocMap.getIdentifier(taddr);
-		if(assocSrc != null && identifier == null)
+		if(assocSrc != null && identifier == null) {
 			identifier = assocSrc.getIdentifier(taddr);
+
+			// if there is no association in the "cache" (assocMap),
+			// but an association is found in the association source,
+			// updates the assocMap to avoid unnecessary requests
+			if(identifier != null) {
+				assocMap.put(identifier, taddr);
+
+				// since the association was retrieved from the
+				// association source, subscribes to the node notifications
+				if(assocNotifier != null)
+					assocNotifier.subscribeToNode(this, identifier);
+			}
+		}
 		return identifier;
 	}
 
@@ -130,8 +143,21 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public TransportAddress getTransportAddress(String nodeId){
 		TransportAddress taddr = assocMap.getAddress(nodeId);
-		if(assocSrc != null && taddr == null)
+		if(assocSrc != null && taddr == null) {
 			taddr = assocSrc.getTransportAddress(nodeId);
+
+			// if there is no association in the "cache" (assocMap),
+			// but an association is found in the association source,
+			// updates the assocMap to avoid unnecessary requests
+			if(taddr != null) {
+				assocMap.put(nodeId, taddr);
+
+				// since the association was retrieved from the
+				// association source, subscribes to the node notifications
+				if(assocNotifier != null)
+					assocNotifier.subscribeToNode(this, nodeId);
+			}
+		}
 		return taddr;
 	}
 
@@ -618,14 +644,8 @@ public class EOMiddleware implements AssociationSubscriber {
 						TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
 
 						// update is only performed if needed, as to not slow other threads by using a write lock
-						if(!taddr.equals(getTransportAddress(srcId))) {
-							// if it is the first time adding the node identifier,
-							// then subscribe to the association notifications for the node
-							if(assocMap.hasIdentifier(srcId) && assocNotifier != null)
-								assocNotifier.subscribeToNode(EOMiddleware.this, srcId);
-
+						if(!taddr.equals(getTransportAddress(srcId)))
 							assocMap.put(srcId, taddr);
-						}
 
 						if (msgType == REQSLOT) {
 							ReqSlotsMsg rsm = new ReqSlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());
