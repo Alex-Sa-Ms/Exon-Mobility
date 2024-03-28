@@ -117,7 +117,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public String getIdentifier(TransportAddress taddr){
 		String identifier = assocMap.getIdentifier(taddr);
-		if(identifier == null)
+		if(assocSrc != null && identifier == null)
 			identifier = assocSrc.getIdentifier(taddr);
 		return identifier;
 	}
@@ -130,7 +130,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public TransportAddress getTransportAddress(String nodeId){
 		TransportAddress taddr = assocMap.getAddress(nodeId);
-		if(taddr == null)
+		if(assocSrc != null && taddr == null)
 			taddr = assocSrc.getTransportAddress(nodeId);
 		return taddr;
 	}
@@ -211,6 +211,10 @@ public class EOMiddleware implements AssociationSubscriber {
 	/* ***** Core functionality ***** */
 	
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
+		// TODO - need to define default N and P (talk with Prof)
+					//In the midtime, always register the destination before sending a message
+		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
+
 		if (sendFirstTime) {
 			sendFirstTime = false;
 			P = calculatePSender(nodeId);
@@ -612,9 +616,16 @@ public class EOMiddleware implements AssociationSubscriber {
 					if(id.equals(destId) && srcId != null) {
 						// updates id to transport address association (required for messages to be forwarded correctly)
 						TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
+
 						// update is only performed if needed, as to not slow other threads by using a write lock
-						if(!taddr.equals(getTransportAddress(srcId)))
+						if(!taddr.equals(getTransportAddress(srcId))) {
+							// if it is the first time adding the node identifier,
+							// then subscribe to the association notifications for the node
+							if(assocMap.hasIdentifier(srcId) && assocNotifier != null)
+								assocNotifier.subscribeToNode(EOMiddleware.this, srcId);
+
 							assocMap.put(srcId, taddr);
+						}
 
 						if (msgType == REQSLOT) {
 							ReqSlotsMsg rsm = new ReqSlotsMsg(srcId, destId, b.getLong(), b.getLong(), b.getLong(), b.getDouble());

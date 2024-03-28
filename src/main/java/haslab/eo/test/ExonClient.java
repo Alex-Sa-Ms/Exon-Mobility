@@ -3,6 +3,7 @@ package haslab.eo.test;
 import haslab.eo.EOMiddleware;
 import haslab.eo.TransportAddress;
 import haslab.eo.associations.CsvAssociationSource;
+import haslab.eo.associations.CsvAutoRefreshableAssociationSource;
 import haslab.eo.msgs.ClientMsg;
 
 
@@ -14,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
 
 public class ExonClient {
-    public static void main(String[] args) throws SocketException, UnknownHostException, InterruptedException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         Scanner scanner = new Scanner(System.in);
         String id;
         int port;
@@ -30,6 +31,7 @@ public class ExonClient {
         }
 
         EOMiddleware eoMiddleware = EOMiddleware.start(id, null, port);
+        eoMiddleware.setAssociationSource(CsvAutoRefreshableAssociationSource.create("staticTopology.csv", ";"));
         new Thread(() -> {
             while (true) {
                 System.out.print("Command? ");
@@ -55,7 +57,7 @@ public class ExonClient {
                         System.out.println("Filepath:");
                         String filepath = scanner.nextLine();
                         try {
-                            CsvAssociationSource src = CsvAssociationSource.create(filepath, ";");
+                            CsvAutoRefreshableAssociationSource src = CsvAutoRefreshableAssociationSource.create(filepath, ";");
                             eoMiddleware.setAssociationSource(src);
                         } catch (IOException ignored) {}
                     }

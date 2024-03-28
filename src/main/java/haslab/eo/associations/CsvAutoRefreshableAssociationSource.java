@@ -172,6 +172,8 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
                 TransportAddress currAddr =
                         this.assocMap.getAddress(e.getKey());
 
+                System.out.println("nodeId: " + e.getKey() + " | currAddr: " + currAddr);
+
                 // if the current address is null then the association is new
                 if(currAddr == null){
                     this.assocEvents.add(new NewAssociationEvent(e.getKey(), e.getValue()));
