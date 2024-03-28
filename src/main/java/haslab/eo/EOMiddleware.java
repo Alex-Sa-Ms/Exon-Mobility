@@ -19,6 +19,13 @@ import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.nio.ByteBuffer;
 
+// TODO - fix a problem where after trying to send a message when not connected to the network,
+//		and the "testing network" fails saying that could not find the host,
+//		the message goes to "void". After giving connection to the client,
+//		the message is being sent somehow, but only appears at the server,
+//		after restarting the client and sending a new message. This new message
+//		will be substituted by the first message, and will never arrive.
+
 // TODO - should I create an interface that restricts the methods that can be called?
 //			Limit the methods to send, receive & close. Avoids invocation of methods like "notify"
 //			from classes that shouldn't call it.
@@ -210,6 +217,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			case UpdatedAssociationEvent uae -> {
 				// creates/updates local association
 				this.assocMap.put(uae.nodeId, uae.taddr);
+				System.out.println("Updated Association: " + uae.nodeId + "<->" + uae.taddr);
 			}
 			/*
 			// At the moment only the "updated association" event is supported.

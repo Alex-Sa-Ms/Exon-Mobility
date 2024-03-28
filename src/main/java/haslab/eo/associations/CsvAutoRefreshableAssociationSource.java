@@ -176,13 +176,11 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
                 if(currAddr == null){
                     this.assocEvents.add(new NewAssociationEvent(e.getKey(), e.getValue()));
                     newMap.put(e.getKey(), e.getValue());
-                    System.out.println("New Association: " + e.getKey() + "<->" + e.getValue());
                 }
                 // if the current address differs from the address read from the file
                 else if (!currAddr.equals(e.getValue())) {
                     this.assocEvents.add(new UpdatedAssociationEvent(e.getKey(), e.getValue()));
                     newMap.put(e.getKey(), e.getValue());
-                    System.out.println("Updated Association: " + e.getKey() + "<->" + e.getValue() + "(prevAddr: " + currAddr + ")");
                 }
             }
 
