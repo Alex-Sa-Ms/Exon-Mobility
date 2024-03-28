@@ -36,14 +36,23 @@ public interface AssociationNotifier {
 
     /**
      * Allows subscribing to all events.
-     * The association source must notify all events regardless of the node identifier.
+     * This should create a global subscription.
+     * The association source must notify all events
+     * regardless of the node identifier.
+     * It's important to notice that a subscriber
+     * with a global subscription and a specific subscription
+     * will receive a notification twice for the node specified
+     * in the specific subscription.
      * @param sub subscriber instance
      */
     void subscribeToAll(AssociationSubscriber sub);
 
     /**
      * Allows cancelling a previously made global subscription.
+     * This does not remove the node-specific subscriptions.
      * @param sub subscriber instance
      */
     void unsubscribeFromAll(AssociationSubscriber sub);
+
+    void notifySubscribers();
 }

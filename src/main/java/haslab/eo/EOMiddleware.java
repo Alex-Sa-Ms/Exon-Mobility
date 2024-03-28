@@ -203,6 +203,11 @@ public class EOMiddleware implements AssociationSubscriber {
 		}
 	}
 
+	@Override
+	public int hashCode() {
+		return id.hashCode();
+	}
+
 	/* ***** Core functionality ***** */
 	
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {

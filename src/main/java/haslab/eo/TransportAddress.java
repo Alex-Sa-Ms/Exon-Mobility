@@ -33,4 +33,9 @@ public class TransportAddress implements Serializable {
         TransportAddress other = (TransportAddress) o;
         return this.port == other.port && this.addr.equals(other.addr);
     }
+
+    @Override
+    public String toString() {
+        return addr.getHostAddress() + ":" + port;
+    }
 }

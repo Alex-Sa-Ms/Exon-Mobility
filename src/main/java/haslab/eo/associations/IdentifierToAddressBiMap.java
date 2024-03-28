@@ -42,6 +42,14 @@ public class IdentifierToAddressBiMap {
         addrToIdMap.put(newAddr, newId);
     }
 
+    public boolean hasIdentifier(String nodeId){
+        return idToAddrMap.containsKey(nodeId);
+    }
+
+    public boolean hasAddress(TransportAddress taddr){
+        return addrToIdMap.containsKey(taddr);
+    }
+
     public void removeId(String nodeId) {
         TransportAddress taddr = idToAddrMap.get(nodeId);
         idToAddrMap.remove(nodeId);
@@ -64,5 +72,12 @@ public class IdentifierToAddressBiMap {
 
     public Set<TransportAddress> getAddresses() {
         return addrToIdMap.keySet();
+    }
+
+    public IdentifierToAddressBiMap clone(){
+        IdentifierToAddressBiMap newMap = new IdentifierToAddressBiMap();
+        for(Map.Entry<String,TransportAddress> e : this.idToAddrMap.entrySet())
+            newMap.put(e.getKey(), e.getValue());
+        return newMap;
     }
 }

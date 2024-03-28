@@ -60,6 +60,24 @@ public class IdentifierToAddressBiMapWithLock {
         }
     }
 
+    public boolean hasIdentifier(String nodeId){
+        try {
+            this.lck.readLock().lock();
+            return idToAddrMap.containsKey(nodeId);
+        }finally {
+            this.lck.readLock().unlock();
+        }
+    }
+
+    public boolean hasAddress(TransportAddress taddr){
+        try {
+            this.lck.readLock().lock();
+            return addrToIdMap.containsKey(taddr);
+        }finally {
+            this.lck.readLock().unlock();
+        }
+    }
+
     public void removeId(String nodeId){
         try{
             this.lck.writeLock().lock();
@@ -104,6 +122,18 @@ public class IdentifierToAddressBiMapWithLock {
         try{
             this.lck.readLock().lock();
             return addrToIdMap.keySet();
+        }finally {
+            this.lck.readLock().unlock();
+        }
+    }
+
+    public IdentifierToAddressBiMap clone(){
+        try{
+            this.lck.readLock().lock();
+            IdentifierToAddressBiMap newMap = new IdentifierToAddressBiMap();
+            for(Map.Entry<String,TransportAddress> e : this.idToAddrMap.entrySet())
+                newMap.put(e.getKey(), e.getValue());
+            return newMap;
         }finally {
             this.lck.readLock().unlock();
         }
