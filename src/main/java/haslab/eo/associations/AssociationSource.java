@@ -2,7 +2,7 @@ package haslab.eo.associations;
 
 import haslab.eo.TransportAddress;
 
-/* TODO - create a simple association source with notifier capabilities
+/* TODO - (NOT FOR NOW) Create a simple association source with notifier capabilities
     1. Create simple presence service using UDP.
         -> Initialized using a CSV file.
         -> Should allow nodes to be registered using the globally unique identifier

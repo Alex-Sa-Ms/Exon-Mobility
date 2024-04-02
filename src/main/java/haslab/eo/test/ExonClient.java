@@ -2,6 +2,7 @@ package haslab.eo.test;
 
 import haslab.eo.EOMiddleware;
 import haslab.eo.TransportAddress;
+import haslab.eo.associations.AssociationSource;
 import haslab.eo.associations.CsvAssociationSource;
 import haslab.eo.associations.CsvAutoRefreshableAssociationSource;
 import haslab.eo.msgs.ClientMsg;
@@ -19,7 +20,7 @@ public class ExonClient {
         Scanner scanner = new Scanner(System.in);
         String id;
         int port;
-        if (args.length == 2) {
+        if (args.length >= 2) {
             id = args[0];
             port = Integer.parseInt(args[1]);
         } else {
@@ -31,7 +32,16 @@ public class ExonClient {
         }
 
         EOMiddleware eoMiddleware = EOMiddleware.start(id, null, port);
-        eoMiddleware.setAssociationSource(CsvAutoRefreshableAssociationSource.create("staticTopology.csv", ";"));
+        try {
+            String assocSrcFP = "staticTopology.csv";
+            if(args.length >= 3)
+                assocSrcFP = args[2];
+            AssociationSource assocSrc = CsvAutoRefreshableAssociationSource.create(assocSrcFP, ";");
+            eoMiddleware.setAssociationSource(assocSrc);
+        }catch (Exception e) {
+            System.out.println("Middleware initialized without an association source.");
+        }
+
         new Thread(() -> {
             while (true) {
                 System.out.print("Command? ");
@@ -73,14 +83,28 @@ public class ExonClient {
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
+                } else if(line.equals("receive")){
+                    ClientMsg cMsg = null;
+                    try {
+                        cMsg = eoMiddleware.receive(0L);
+                        if(cMsg != null) {
+                            String msg = String.valueOf(StandardCharsets.UTF_8.decode(ByteBuffer.wrap(cMsg.msg)));
+                            System.out.println("Received '" + msg + "' from '" + cMsg.nodeId);
+                        }
+                        else System.out.println("There are no msgs to be received.");
+                    } catch (InterruptedException ie) {
+                        System.out.println("There are no msgs to be received.");
+                    }
                 }
             }
         }).start();
 
         while (true) {
-            ClientMsg cMsg = eoMiddleware.receive();
-            String msg = String.valueOf(StandardCharsets.UTF_8.decode(ByteBuffer.wrap(cMsg.msg)));
-            System.out.println("Received '" + msg + "' from '" + cMsg.nodeId);
+            ClientMsg cMsg = eoMiddleware.receive(1000L);
+            if(cMsg != null) {
+                String msg = String.valueOf(StandardCharsets.UTF_8.decode(ByteBuffer.wrap(cMsg.msg)));
+                System.out.println("Received '" + msg + "' from '" + cMsg.nodeId);
+            }
         }
     }
 }

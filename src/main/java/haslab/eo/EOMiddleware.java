@@ -1,7 +1,7 @@
 package haslab.eo;
 
 import java.nio.charset.StandardCharsets;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.*;
 
 import haslab.eo.associations.AssociationNotifier;
@@ -14,21 +14,8 @@ import haslab.eo.msgs.*;
 
 import java.io.*;
 import java.net.*;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.PriorityQueue;
 import java.nio.ByteBuffer;
 
-// TODO - fix a problem where after trying to send a message when not connected to the network,
-//		and the "testing network" fails saying that could not find the host,
-//		the message goes to "void". After giving connection to the client,
-//		the message is being sent somehow, but only appears at the server,
-//		after restarting the client and sending a new message. This new message
-//		will be substituted by the first message, and will never arrive.
-
-// TODO - should I create an interface that restricts the methods that can be called?
-//			Limit the methods to send, receive & close. Avoids invocation of methods like "notify"
-//			from classes that shouldn't call it.
 public class EOMiddleware implements AssociationSubscriber {
 	private final String id; // identifier of the node
 	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
@@ -38,7 +25,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
 	private BlockingQueue<DQMsg> deliveryQueue = new ArrayBlockingQueue<DQMsg>(1000000);
 	private ConcurrentHashMap<String, SendRecord> sr = new ConcurrentHashMap<>();
-	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>(); // TODO - move to the reader thread as a normal hash map
+	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>(); // TODO - move to the algo thread as a normal hash map when debugging is finished
 	private DatagramSocket sk;
 	int N, P;
 	private final int maxAcks = 1;
@@ -69,8 +56,12 @@ public class EOMiddleware implements AssociationSubscriber {
 		sk.setReceiveBufferSize(2000000000);
 		System.out.println("UDP DatagramSocket Created: " + sk.getLocalAddress().getHostName() + ":" + sk.getLocalPort());
 
-		// bb = ByteBuffer.allocate(MTUSize); // TODO - why is this needed?
-		// allocates byte array and writes the identifier of the node (avoiding the need to write this for every msg)
+		// Every msg needs to contain the identifier of both the sender
+		// and the receiver. Since the sender identifier, for outgoing messages,
+		// always matches the identifier of the node itself, the byte array
+		// is allocated and the identifier is written in the array when creating
+		// the instance of the middleware. By doing this, when sending a message
+		// the new content only needs to be written after the calculated offset (bbOffset).
 		outData = new byte[MTUSize];
 		bb = ByteBuffer.wrap(outData);
 		bb.putInt(this.id.length());
@@ -278,6 +269,9 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("record: " + entry.getValue());
 			System.out.println("slots is empty?:" + entry.getValue().slt.isEmpty());
 		}
+		System.out.println("\n----------- Delivery Queue -----------");
+		System.out.println(deliveryQueue);
+		System.out.flush();
 	}
 
 	private boolean netSend(String destId, NetMsg m) throws IOException, InterruptedException {
@@ -341,7 +335,7 @@ public class EOMiddleware implements AssociationSubscriber {
 		return new ClientMsg(m.nodeId, m.msg);
 	}
 
-	public Msg receive(long timeout) throws InterruptedException{
+	public ClientMsg receive(long timeout) throws InterruptedException{
 		if (receiveFirstTime) {
 			receiveFirstTime = false;
 			try {
@@ -358,13 +352,17 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	public void close() {
-		//TODO - close middleware
-		// terminate threads and close the socket
+		//TODO - close middleware. Terminate threads and close the socket.
+		//	Close can only happen after no send/receive records exist.
+		//  Or if they do, check if there is actually anything to be received/sent.
 	}
+
+	// TODO - make asynchronous close method, and create a isClosed() method.
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
-		private String j;
+		private String j; // remote peer node identifier
+		//private HashMap<String, ReceiveRecord> rr = new HashMap<>();
 		private PriorityQueue<Event> pq = new PriorityQueue<Event>(100000, new TimeComparator());
 		private long timeout, currentTime;
 		private int slotsTimeout = 50000;
@@ -567,7 +565,6 @@ public class EOMiddleware implements AssociationSubscriber {
 		public void requestSlots(String j) {
 			SendRecord c = sr.get(j);
 			long n = N + c.msg.size() - c.envelopes.size();
-
 			try {
 				if (n > 0) {
 					long e;
@@ -584,7 +581,7 @@ public class EOMiddleware implements AssociationSubscriber {
 				}
 				// There are no messages and the number of envelopes equals N (base number of slots that should be requested)
 				else if (c.tok.size() == 0 && c.msg.size() == 0) {
-					// todo - This msg that "nullifies" all slots at the receiver, is only sent once,
+					// TODO - This msg that "nullifies" all slots at the receiver, is only sent once,
 					//  therefore if it does not arrives, the receiver record will hang forever.
 					netSend(j, new ReqSlotsMsg(id, j, c.sck, 0, c.sck, c.RTT));
 					ck = Math.max(ck, c.sck);
@@ -702,8 +699,28 @@ public class EOMiddleware implements AssociationSubscriber {
 		long startTime = System.currentTimeMillis();
 		int p = 0;
 		try (ServerSocket serverSocket = new ServerSocket(tcpPort)) {
+			serverSocket.setSoTimeout(5000); // Set timeout in milliseconds
 			System.out.println("Testing the network...");
-			Socket socket = serverSocket.accept();
+
+			Socket socket = null;
+			boolean proceed = false;
+			while (!proceed) {
+				try {
+					socket = serverSocket.accept();
+					proceed = true;
+				} catch (SocketTimeoutException ste) {
+					// if either the delivery queue or the receive records' structure
+					// are not empty, then messages have already been exchanged,
+					// therefore the method should not be hanging waiting for a connection.
+					// Handling this situation is required as a sender that attempts to
+					// perform the P calculation before a path between the sender and receiver
+					// exists, will probably "skip" the calculation has it was not possible to
+					// connect to the receiver within a timeout.
+					if(!deliveryQueue.isEmpty() || !rr.isEmpty())
+						return p;
+				}
+			}
+
 			InputStream input = socket.getInputStream();
 			BufferedReader reader = new BufferedReader(new InputStreamReader(input));
 			OutputStream output = socket.getOutputStream();
@@ -742,34 +759,35 @@ public class EOMiddleware implements AssociationSubscriber {
 		int p = 0;
 
 		TransportAddress taddr = getTransportAddress(nodeId);
-		assert taddr != null;
 
-		try (Socket socket = new Socket(taddr.addr.getHostAddress(), tcpPort)) {
-			System.out.println("Testing the network...");
-			OutputStream output = socket.getOutputStream();
-			PrintWriter writer = new PrintWriter(output, true);
-			InputStream input = socket.getInputStream();
-			BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+		if(taddr != null) {
+			try (Socket socket = new Socket(taddr.addr.getHostAddress(), tcpPort)) {
+				System.out.println("Testing the network...");
+				OutputStream output = socket.getOutputStream();
+				PrintWriter writer = new PrintWriter(output, true);
+				InputStream input = socket.getInputStream();
+				BufferedReader reader = new BufferedReader(new InputStreamReader(input));
 
-			// Calculating RTT
-			long start = System.currentTimeMillis();
-			for (int i = 0; i < rttIterations; i++) {
-				writer.println(" ");
-				reader.readLine();
+				// Calculating RTT
+				long start = System.currentTimeMillis();
+				for (int i = 0; i < rttIterations; i++) {
+					writer.println(" ");
+					reader.readLine();
+				}
+				long duration = System.currentTimeMillis() - start;
+				double tcpRTT = ((double) duration) / ((double) rttIterations);
+				writer.println(tcpRTT); // send TCP_RTT
+
+				// Calculating bandwidth, and then P
+				for (int i = 0; i < bandwidthIterations; i++) {
+					writer.println(m);
+				}
+				p = Integer.parseInt(reader.readLine());
+			} catch (UnknownHostException ex) {
+				System.out.println("Server not found: " + ex.getMessage());
+			} catch (IOException ex) {
+				System.out.println("I/O error: " + ex.getMessage());
 			}
-			long duration = System.currentTimeMillis() - start;
-			double tcpRTT = ((double) duration) / ((double) rttIterations);
-			writer.println(tcpRTT); // send TCP_RTT
-
-			// Calculating bandwidth, and then P
-			for (int i = 0; i < bandwidthIterations; i++) {
-				writer.println(m);
-			}
-			p = Integer.parseInt(reader.readLine());
-		} catch (UnknownHostException ex) {
-			System.out.println("Server not found: " + ex.getMessage());
-		} catch (IOException ex) {
-			System.out.println("I/O error: " + ex.getMessage());
 		}
 
 		long time = System.currentTimeMillis() - startTime;

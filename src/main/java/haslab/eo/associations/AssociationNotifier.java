@@ -3,7 +3,6 @@ package haslab.eo.associations;
 public interface AssociationNotifier {
     /* ***** Events ***** */
 
-    // TODO - when subscribing to a specific node, an "ONLINE" or "OFFLINE" notification could be sent immediately.
     /*
         The associations' source may not support the mechanism of notifying events related to nodes.
         However, if it does, the following are the events that must be implemented:
@@ -14,6 +13,9 @@ public interface AssociationNotifier {
             -> "ONLINE": The node has become online. May carry a transport address if the node changed location.
                          (if the presence mechanism is supported)
             -> "OFFLINE": The node has become offline. (if the present mechanism is supported)
+
+         When subscribing to a specific node, if the notifier supports presence verification,
+          an "ONLINE" or "OFFLINE" notification should be sent immediately.
      */
 
     /**
