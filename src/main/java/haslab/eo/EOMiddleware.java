@@ -234,10 +234,20 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	/* ***** Core functionality ***** */
-	
+
+	/**
+	 * Creates message identifier for an outgoing message.
+	 * The message identifier is composed of the current time in nanoseconds, the identifier of the destination node and
+	 * the hash code of the message payload.
+	 * @return message identifier
+	 */
+	private MsgId createOutgoingMsgId(String nodeId, byte[] payload){
+		return new MsgId(nodeId, System.nanoTime(), payload.hashCode());
+	}
+
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
 		// TODO - need to define default N and P (talk with Prof)
-					//In the midtime, always register the destination before sending a message
+		//		In the midtime, always register the destination before sending a message
 		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
 
 		if (sendFirstTime) {
@@ -247,13 +257,48 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("P= " + P + ", N=" + N);
 			System.out.println("----------------------------------- \n");
 		}
+
 		SendRecord c = sr.get(nodeId);
 		if (c != null)
 			c.sem.acquire();
 
-		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg));
+		MsgId msgId = createOutgoingMsgId(nodeId, msg);
+		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
 		algoQueue.put(aqm);
-		return null;  // does not return message id yet
+		return msgId;
+	}
+
+	/**
+	 * Sends the provided payload. As the send operation can block due to the flow control mechanism, a timeout may be provided to determine the maximum
+	 * amount of time that can be waited before giving up on queuing the message. In such case, the method returns 'null'. Otherwise, it returns the message id
+	 * generated for the queued message.
+	 * @param nodeId identifier of the destination node
+	 * @param msg payload
+	 * @param timeout maximum time (in milliseconds) to wait for the message to be queued for a sending operation.
+	 * @return the identifier of the message or 'null' if timeout was reached.
+	 * @throws InterruptedException
+	 * @throws IOException
+	 */
+	public MsgId send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
+		if (sendFirstTime) {
+			sendFirstTime = false;
+			P = calculatePSender(nodeId);
+			N = P * N_Multiplier;
+			System.out.println("P= " + P + ", N=" + N);
+			System.out.println("----------------------------------- \n");
+		}
+
+		// If a send record exists attempts to acquire a permit.
+		// If the operation of acquiring the permit times out,
+		//	returns null.
+		SendRecord c = sr.get(nodeId);
+		if (c != null && !c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
+			return null;
+
+		MsgId msgId = createOutgoingMsgId(nodeId, msg);
+		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
+		algoQueue.put(aqm);
+		return msgId;
 	}
 
 	public void debugPrints(){
