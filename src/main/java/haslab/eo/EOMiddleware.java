@@ -45,9 +45,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	/* ***** Initialization & Constructors ***** */
 
 	private EOMiddleware(String identifier, String addr, int port) throws SocketException, UnknownHostException {
-		// TODO - find a better alternative that has an even smaller chance of collision
-		// If an identifier is not provided, a random UUID is created
-		this.id = identifier != null ? identifier : UUID.randomUUID().toString();
+		// If an identifier is not provided, a random identifier is created
+		this.id = identifier != null ? identifier : System.nanoTime() + "-" + UUID.randomUUID();
 
 		// if no bind address is provided, the wildcard address is used.
 		InetAddress address = addr != null ? InetAddress.getByName(addr) : null;
