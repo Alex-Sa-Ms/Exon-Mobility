@@ -581,8 +581,6 @@ public class EOMiddleware implements AssociationSubscriber {
 				}
 				// There are no messages and the number of envelopes equals N (base number of slots that should be requested)
 				else if (c.tok.size() == 0 && c.msg.size() == 0) {
-					// TODO - This msg that "nullifies" all slots at the receiver, is only sent once,
-					//  therefore if it does not arrives, the receiver record will hang forever.
 					netSend(j, new ReqSlotsMsg(id, j, c.sck, 0, c.sck, c.RTT));
 					ck = Math.max(ck, c.sck);
 					sr.remove(j);
