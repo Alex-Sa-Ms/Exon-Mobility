@@ -11,30 +11,45 @@ import haslab.eo.associations.IdentifierToAddressBiMapWithLock;
 import haslab.eo.associations.events.*;
 import haslab.eo.events.*;
 import haslab.eo.msgs.*;
+import haslab.eo.exceptions.ClosedException;
 
 import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class EOMiddleware implements AssociationSubscriber {
+	// for transport address and node identifiers associations
 	private final String id; // identifier of the node
 	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
-	// private ReadWriteLock assocLck = new ReentrantReadWriteLock(); // lock for operations related to associations
 	private AssociationSource assocSrc = null;
 	private AssociationNotifier assocNotifier = null;
+
+	// for graceful close operation
+	private final int RUNNING = 1, CLOSING = 2, CLOSED = 3;
+	private AtomicInteger state = new AtomicInteger(RUNNING);
+	private final AlgoThread algoThread = new AlgoThread();
+	private final ReaderThread readerThread = new ReaderThread();
+
+	// for core algorithm
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
-	private BlockingQueue<DQMsg> deliveryQueue = new ArrayBlockingQueue<DQMsg>(1000000);
-	private ConcurrentHashMap<String, SendRecord> sr = new ConcurrentHashMap<>();
-	private ConcurrentHashMap<String, ReceiveRecord> rr = new ConcurrentHashMap<>(); // TODO - move to the algo thread as a normal hash map when debugging is finished
+	private Queue<DQMsg> deliveryQueue = new ArrayDeque<>(1000000);
+	private ReentrantLock deliveryLck = new ReentrantLock();
+	private Condition deliveryCond = deliveryLck.newCondition();
+	private Map<String, SendRecord> sr = new ConcurrentHashMap<>();
+	private Map<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
 	private DatagramSocket sk;
-	int N, P;
+	private int N, P;
 	private final int maxAcks = 1;
-	private ByteBuffer bb;
 	private final int MTUSize = 1400;
 	private final int REQSLOT = 1, SLOT = 2, TOKEN = 3, ACK = 4;
 	private final byte[] outData; // byte array used to send messages
+	private ByteBuffer bb;
 	private final int bbOffset; // marks where new data may start being written to the array. The node identifier and its length is written before this offset.
 	private boolean sendFirstTime = true, receiveFirstTime = true;
+
 	// for P calculations
 	private int tcpPort = 12121;
 	private int bandwidthIterations = 10000;
@@ -79,8 +94,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public static EOMiddleware start(String identifier, String address, int port) throws SocketException, UnknownHostException {
 		EOMiddleware eo = new EOMiddleware(identifier, address, port);
-		eo.new AlgoThread().start();
-		eo.new ReaderThread().start();
+		eo.algoThread.start();
+		eo.readerThread.start();
 		return eo;
 	}
 
@@ -232,6 +247,53 @@ public class EOMiddleware implements AssociationSubscriber {
 		return id.hashCode();
 	}
 
+	/* ***** Graceful Close ***** */
+
+	/**
+	 * Initiates the closing process. Signals threads that they should
+	 * finish their work and waits for them to terminate
+	 */
+	public void close() throws InterruptedException {
+		// sets the state to 'closing' if the current state is 'running'
+		int witnessValue = state.compareAndExchange(RUNNING, CLOSING);
+		if (witnessValue == RUNNING) {
+			// Creates a CloseMsg to inform the algoThread that it should finish
+			// its tasks, terminate the ReaderThread and then return
+			algoQueue.add(new AQMsg(null, new CloseMsg()));
+		}
+		if(witnessValue != CLOSED) {
+			// Wait for the algoThread to return
+			algoThread.join();
+		}
+	}
+
+	/**
+	 * Initiates the closing process.
+	 * Signals threads that they should finish their work
+	 * and returns immediately without waiting for them to terminate.
+	 */
+	public void closeNoWait(){
+		// sets the state to 'closing' if the current state is 'running'
+		int witnessValue = state.compareAndExchange(RUNNING, CLOSING);
+		if (witnessValue == RUNNING) {
+			// Creates a CloseMsg to inform the algoThread that it should finish
+			// its tasks, terminate the ReaderThread and then return
+			algoQueue.add(new AQMsg(null, new CloseMsg()));
+		}
+	}
+
+	public boolean isClosed() {
+		return state.get() == CLOSED;
+	}
+
+	public boolean allowsReceiving(){
+		return state.get() != CLOSED;
+	}
+
+	public boolean allowsSending(){
+		return state.get() == RUNNING;
+	}
+
 	/* ***** Core functionality ***** */
 
 	/**
@@ -245,6 +307,14 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
+		// throws runtime closed exception if an attempt of sending a message
+		// is performed after invoking the close() method
+		if(state.get() != RUNNING)
+			throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+
+		// There is no need for a custom locking mechanism just to prevent a message
+		// from being sent between checking the state and the queueing operation.
+
 		// TODO - need to define default N and P (talk with Prof)
 		//		In the midtime, always register the destination before sending a message
 		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
@@ -279,6 +349,11 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
+		// throws runtime closed exception if an attempt of sending a message
+		// is performed after invoking the close() method
+		if(state.get() != RUNNING)
+			throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+
 		if (sendFirstTime) {
 			sendFirstTime = false;
 			P = calculatePSender(nodeId);
@@ -375,11 +450,36 @@ public class EOMiddleware implements AssociationSubscriber {
 				e.printStackTrace();
 			}
 		}
-		DQMsg m = deliveryQueue.take();
-		return new ClientMsg(m.nodeId, m.msg);
+
+		try {
+			deliveryLck.lock();
+			while(deliveryQueue.isEmpty()) {
+				// Throws a runtime exception if an attempt of receiving a message is performed
+				// after the middleware is closed.
+				if(state.get() == CLOSED)
+					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+				deliveryCond.await();
+			}
+			DQMsg m = deliveryQueue.poll();
+			if(m != null)
+				return new ClientMsg(m.nodeId, m.msg);
+			else
+				return null;
+		} finally {
+			deliveryLck.unlock();
+		}
 	}
 
-	public ClientMsg receive(long timeout) throws InterruptedException{
+	/**
+	 *
+	 * @param time Interval of time, in milliseconds,
+	 *                   that the caller is willing to wait
+	 *                   for a message to be received.
+	 * @return message or 'null' if the time expired before a
+	 * 				message could have been received
+	 * @throws InterruptedException
+	 */
+	public ClientMsg receive(long time) throws InterruptedException{
 		if (receiveFirstTime) {
 			receiveFirstTime = false;
 			try {
@@ -389,26 +489,33 @@ public class EOMiddleware implements AssociationSubscriber {
 				e.printStackTrace();
 			}
 		}
-        DQMsg m = deliveryQueue.poll(timeout, TimeUnit.MILLISECONDS);
-		if(m != null)
-			return new ClientMsg(m.nodeId, m.msg);
-		return null;
-	}
 
-	public void close() {
-		//TODO - close middleware. Terminate threads and close the socket.
-		//	Close can only happen after no send/receive records exist.
-		//  Or if they do, check if there is actually anything to be received/sent.
+		try {
+			long stopTime = System.currentTimeMillis() + time;
+			deliveryLck.lock();
+			while(deliveryQueue.isEmpty() && time > 0) {
+				// Throws a runtime exception if an attempt of receiving a message is performed
+				// after the middleware is closed.
+				if(state.get() == CLOSED)
+					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+				deliveryCond.await(time, TimeUnit.MILLISECONDS);
+				time = stopTime - System.currentTimeMillis();
+			}
+			DQMsg m = deliveryQueue.poll();
+			if(m != null)
+				return new ClientMsg(m.nodeId, m.msg);
+			else
+				return null;
+		} finally {
+			deliveryLck.unlock();
+		}
 	}
-
-	// TODO - make asynchronous close method, and create a isClosed() method.
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
 		private String j; // remote peer node identifier
-		//private HashMap<String, ReceiveRecord> rr = new HashMap<>();
 		private PriorityQueue<Event> pq = new PriorityQueue<Event>(100000, new TimeComparator());
-		private long timeout, currentTime;
+		private long timeout, currentTime, closeTimeout = 10000;
 		private int slotsTimeout = 50000;
 		final double ALPHA = 0.2, BETA = 2;
 		final double LBOUND = 100, UBOUND = 1000;
@@ -521,10 +628,16 @@ public class EOMiddleware implements AssociationSubscriber {
 							//System.out.println("Token Received: "+ rm + "| ReceiveRecord: (" + c + ")");
 							if ((c != null) && (r == c.rck)) {
 								if (c.slt.contains(s)) {
-									if (deliveryQueue.offer(new DQMsg(j, msg))) { // deliver(msg)
-										//System.out.println("Message added to delivery queue.");
-										c.slt.remove(s);
-										sendAck(j, c, s, r, msgTimeout(currentTime, receiverRTT, acksMultiplier));
+									try {
+										deliveryLck.lock();
+										if (deliveryQueue.offer(new DQMsg(j, msg))) { // deliver(msg)
+											//System.out.println("Message added to delivery queue.");
+											c.slt.remove(s);
+											sendAck(j, c, s, r, msgTimeout(currentTime, receiverRTT, acksMultiplier));
+											deliveryCond.signal(); // signal a client thread that a message is available to be received
+										}
+									}finally {
+										deliveryLck.unlock();
 									}
 								} else {
 									sendAck(j, c, s, r, msgTimeout(currentTime, receiverRTT, acksMultiplier));
@@ -545,8 +658,12 @@ public class EOMiddleware implements AssociationSubscriber {
 									}
 								}
 							}
+						} else if (m.msg instanceof CloseMsg){
+							// Adds a close event that should execute immediately
+							pq.add(new CloseEvent(currentTime));
 						}
 					}
+
 					// Periodically
 					while (true) {
 						eve = pq.peek();
@@ -598,6 +715,27 @@ public class EOMiddleware implements AssociationSubscriber {
 									c.acks.clear();
 								}
 							}
+						} else if (eve instanceof CloseEvent){
+							// if there are no records and there are no messages to process
+							// than the middleware can close
+							if (rr.isEmpty() && sr.isEmpty() && pq.isEmpty()) {
+								try {
+									deliveryLck.lock();
+									// sets the closed state
+									state.set(CLOSED);
+									// Signals all possible client threads
+									// waiting for a client message.
+									deliveryCond.signalAll();
+								}finally { deliveryLck.unlock(); }
+								// Closes the socket. Throws SocketException for
+								// the ReaderThread to stop waiting for a datagram.
+								sk.close();
+								// interrupts the reader thread and
+								// waits for it before returning
+								readerThread.interrupt();
+								readerThread.join();
+								return;
+							}else pq.add(new CloseEvent(currentTime + closeTimeout));
 						}
 					}
 				}
@@ -674,7 +812,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			ByteBuffer b = ByteBuffer.allocate(MTUSize);
 			byte[] incomingData = new byte[MTUSize];
 			try {
-				while (true) {
+				while (!isInterrupted()) {
 					Msg m = null;
 					DatagramPacket in_pkt = new DatagramPacket(incomingData, incomingData.length);
 					sk.receive(in_pkt);
@@ -730,9 +868,15 @@ public class EOMiddleware implements AssociationSubscriber {
 						algoQueue.put(aqm);
 					}
 				}
-			} catch (Exception e) {
+			} catch (SocketException e) {
+				if(EOMiddleware.this.isClosed()) return;
+				else e.printStackTrace();
+			} catch (Exception e){
 				e.printStackTrace();
 			}
+
+			System.out.println("ReaderThread: Acabei!");
+			System.out.flush();
 		}
 	}
 
@@ -751,15 +895,20 @@ public class EOMiddleware implements AssociationSubscriber {
 					socket = serverSocket.accept();
 					proceed = true;
 				} catch (SocketTimeoutException ste) {
-					// if either the delivery queue or the receive records' structure
+					// if either the delivery queue or the receive records structure
 					// are not empty, then messages have already been exchanged,
 					// therefore the method should not be hanging waiting for a connection.
-					// Handling this situation is required as a sender that attempts to
+					// Handling this situation is required since a sender that attempts to
 					// perform the P calculation before a path between the sender and receiver
 					// exists, will probably "skip" the calculation has it was not possible to
 					// connect to the receiver within a timeout.
-					if(!deliveryQueue.isEmpty() || !rr.isEmpty())
-						return p;
+					try {
+						deliveryLck.lock();
+						if (!deliveryQueue.isEmpty() || !rr.isEmpty())
+							return p;
+					}finally {
+						deliveryLck.unlock();
+					}
 				}
 			}
 
