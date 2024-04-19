@@ -29,7 +29,8 @@ public class EOMiddleware implements AssociationSubscriber {
 
 	// for graceful close operation
 	private final int RUNNING = 1, CLOSING = 2, CLOSED = 3;
-	private AtomicInteger state = new AtomicInteger(RUNNING);
+	private int state = RUNNING;
+	private ReentrantLock stateLck = new ReentrantLock();
 	private final AlgoThread algoThread = new AlgoThread();
 	private final ReaderThread readerThread = new ReaderThread();
 
@@ -254,14 +255,22 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * finish their work and waits for them to terminate
 	 */
 	public void close() throws InterruptedException {
-		// sets the state to 'closing' if the current state is 'running'
-		int witnessValue = state.compareAndExchange(RUNNING, CLOSING);
-		if (witnessValue == RUNNING) {
-			// Creates a CloseMsg to inform the algoThread that it should finish
-			// its tasks, terminate the ReaderThread and then return
-			algoQueue.add(new AQMsg(null, new CloseMsg()));
-		}
-		if(witnessValue != CLOSED) {
+		int currState;
+		try{
+			stateLck.lock();
+			if(state == RUNNING){
+				// sets the state to 'closing'
+				state = CLOSING;
+				// Creates a CloseMsg to inform the algoThread that it should finish
+				// its tasks, terminate the ReaderThread and then return
+				algoQueue.add(new AQMsg(null, new CloseMsg()));
+			}
+			// Saves the current state because to avoid a deadlock the lock must be
+			// released before waiting for the algoThread to terminate.
+			currState = state;
+		}finally { stateLck.unlock(); }
+
+		if(currState != CLOSED) {
 			// Wait for the algoThread to return
 			algoThread.join();
 		}
@@ -273,25 +282,55 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * and returns immediately without waiting for them to terminate.
 	 */
 	public void closeNoWait(){
-		// sets the state to 'closing' if the current state is 'running'
-		int witnessValue = state.compareAndExchange(RUNNING, CLOSING);
-		if (witnessValue == RUNNING) {
-			// Creates a CloseMsg to inform the algoThread that it should finish
-			// its tasks, terminate the ReaderThread and then return
-			algoQueue.add(new AQMsg(null, new CloseMsg()));
+		try{
+			stateLck.lock();
+			if(state == RUNNING){
+				// sets the state to 'closing'
+				state = CLOSING;
+				// Creates a CloseMsg to inform the algoThread that it should finish
+				// its tasks, terminate the ReaderThread and then return
+				algoQueue.add(new AQMsg(null, new CloseMsg()));
+			}
+		}finally { stateLck.unlock(); }
+	}
+
+	private void setState(int newState){
+		try{
+			stateLck.lock();
+			state = newState;
+		}finally {
+			stateLck.unlock();
+		}
+	}
+
+	private int getState(){
+		try{
+			stateLck.lock();
+			return state;
+		}finally {
+			stateLck.unlock();
 		}
 	}
 
 	public boolean isClosed() {
-		return state.get() == CLOSED;
+		try{
+			stateLck.lock();
+			return state == CLOSED;
+		}finally { stateLck.unlock(); }
 	}
 
 	public boolean allowsReceiving(){
-		return state.get() != CLOSED;
+		try{
+			stateLck.lock();
+			return state != CLOSED;
+		}finally { stateLck.unlock(); }
 	}
 
 	public boolean allowsSending(){
-		return state.get() == RUNNING;
+		try{
+			stateLck.lock();
+			return state == RUNNING;
+		}finally { stateLck.unlock(); }
 	}
 
 	/* ***** Core functionality ***** */
@@ -307,14 +346,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
-		// throws runtime closed exception if an attempt of sending a message
-		// is performed after invoking the close() method
-		if(state.get() != RUNNING)
-			throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
-
-		// There is no need for a custom locking mechanism just to prevent a message
-		// from being sent between checking the state and the queueing operation.
-
 		// TODO - need to define default N and P (talk with Prof)
 		//		In the midtime, always register the destination before sending a message
 		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
@@ -328,13 +359,28 @@ public class EOMiddleware implements AssociationSubscriber {
 		}
 
 		SendRecord c = sr.get(nodeId);
-		if (c != null)
+		boolean acquired = false;
+		if (c != null) {
 			c.sem.acquire();
+			acquired = true;
+		}
 
-		MsgId msgId = createOutgoingMsgId(nodeId, msg);
-		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
-		algoQueue.put(aqm);
-		return msgId;
+		try{
+			stateLck.lock();
+			if(state != RUNNING) {
+				// release semaphore since a message won't be sent
+				if(acquired) c.sem.release();
+				// throws runtime closed exception if an attempt of sending a message
+				// is performed after invoking the close() method
+				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+			}
+			MsgId msgId = createOutgoingMsgId(nodeId, msg);
+			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
+			algoQueue.put(aqm);
+			return msgId;
+		}finally {
+			stateLck.unlock();
+		}
 	}
 
 	/**
@@ -349,11 +395,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
-		// throws runtime closed exception if an attempt of sending a message
-		// is performed after invoking the close() method
-		if(state.get() != RUNNING)
-			throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
-
 		if (sendFirstTime) {
 			sendFirstTime = false;
 			P = calculatePSender(nodeId);
@@ -366,13 +407,27 @@ public class EOMiddleware implements AssociationSubscriber {
 		// If the operation of acquiring the permit times out,
 		//	returns null.
 		SendRecord c = sr.get(nodeId);
-		if (c != null && !c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
-			return null;
+		boolean acquired = false;
+		if (c != null) {
+			if (!c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
+				return null;
+			else
+				acquired = true;
+		}
 
-		MsgId msgId = createOutgoingMsgId(nodeId, msg);
-		AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
-		algoQueue.put(aqm);
-		return msgId;
+		try{
+			stateLck.lock();
+			if(state != RUNNING) {
+				if(acquired) c.sem.release(); // release semaphore since a message won't be sent
+				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+			}
+			MsgId msgId = createOutgoingMsgId(nodeId, msg);
+			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
+			algoQueue.put(aqm);
+			return msgId;
+		}finally {
+			stateLck.unlock();
+		}
 	}
 
 	public void debugPrints(){
@@ -463,7 +518,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			while(deliveryQueue.isEmpty()) {
 				// Throws a runtime exception if an attempt of receiving a message is performed
 				// after the middleware is closed.
-				if(state.get() == CLOSED)
+				if(getState() == CLOSED)
 					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
 				deliveryCond.await();
 			}
@@ -503,7 +558,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			while(deliveryQueue.isEmpty() && time > 0) {
 				// Throws a runtime exception if an attempt of receiving a message is performed
 				// after the middleware is closed.
-				if(state.get() == CLOSED)
+				if(getState() == CLOSED)
 					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
 				deliveryCond.await(time, TimeUnit.MILLISECONDS);
 				time = stopTime - System.currentTimeMillis();
@@ -729,7 +784,7 @@ public class EOMiddleware implements AssociationSubscriber {
 								try {
 									deliveryLck.lock();
 									// sets the closed state
-									state.set(CLOSED);
+									setState(CLOSED);
 									// Signals all possible client threads
 									// waiting for a client message.
 									deliveryCond.signalAll();
@@ -819,7 +874,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			ByteBuffer b = ByteBuffer.allocate(MTUSize);
 			byte[] incomingData = new byte[MTUSize];
 			try {
-				while (state.get() != CLOSED) {
+				while (EOMiddleware.this.getState() != CLOSED) {
 					Msg m = null;
 					DatagramPacket in_pkt = new DatagramPacket(incomingData, incomingData.length);
 					sk.receive(in_pkt);
