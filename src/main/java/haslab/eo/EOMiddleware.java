@@ -376,6 +376,13 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	public void debugPrints(){
+		System.out.println("----------- Threads -----------");
+		System.out.println("algoThread: " + (algoThread.isAlive() ? "alive" : "terminated"));
+		System.out.println("readerThread: " + (readerThread.isAlive() ? "alive" : "terminated"));
+		System.out.println("----------- AlgoQueue -----------");
+		System.out.println(algoQueue);
+		System.out.println("----------- EventQueue -----------");
+		System.out.println(algoThread.pq);
 		System.out.println("----------- SendRecords -----------");
 		for (var entry : sr.entrySet()) {
 			System.out.println("receiver: " + entry.getKey());
@@ -389,7 +396,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("slots is empty?:" + entry.getValue().slt.isEmpty());
 		}
 		System.out.println("\n----------- Delivery Queue -----------");
-		System.out.println(deliveryQueue);
+		System.out.println("size: " + deliveryQueue.size() + "\n" + deliveryQueue);
 		System.out.flush();
 	}
 
@@ -718,7 +725,7 @@ public class EOMiddleware implements AssociationSubscriber {
 						} else if (eve instanceof CloseEvent){
 							// if there are no records and there are no messages to process
 							// than the middleware can close
-							if (rr.isEmpty() && sr.isEmpty() && pq.isEmpty()) {
+							if (rr.isEmpty() && sr.isEmpty() && algoQueue.isEmpty()) {
 								try {
 									deliveryLck.lock();
 									// sets the closed state
@@ -812,7 +819,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			ByteBuffer b = ByteBuffer.allocate(MTUSize);
 			byte[] incomingData = new byte[MTUSize];
 			try {
-				while (!isInterrupted()) {
+				while (state.get() != CLOSED) {
 					Msg m = null;
 					DatagramPacket in_pkt = new DatagramPacket(incomingData, incomingData.length);
 					sk.receive(in_pkt);

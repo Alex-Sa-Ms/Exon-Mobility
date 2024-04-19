@@ -1,21 +1,19 @@
-package haslab.eo.test;
+package haslab.eo;
 
 import haslab.eo.EOMiddleware;
 import haslab.eo.TransportAddress;
 import haslab.eo.associations.AssociationSource;
-import haslab.eo.associations.CsvAssociationSource;
 import haslab.eo.associations.CsvAutoRefreshableAssociationSource;
 import haslab.eo.msgs.ClientMsg;
 
 
 import java.io.IOException;
-import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
 
-public class ExonClient {
+public class ExonTestClient {
     public static void main(String[] args) throws IOException, InterruptedException {
         Scanner scanner = new Scanner(System.in);
         String id;
