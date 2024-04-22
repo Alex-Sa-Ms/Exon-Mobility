@@ -203,7 +203,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	public void setAssociationSource(AssociationSource source){
 		// remove all subscriptions from the previous notifier
 		if(this.assocNotifier != null)
-			this.assocNotifier.unsubscribeFromAll(this);
+			for (String nodeId : this.assocMap.getIdentifiers())
+				assocNotifier.unsubscribeFromNode(this,nodeId);
 
 		// sets new association source
 		this.assocSrc = source;
@@ -211,6 +212,7 @@ public class EOMiddleware implements AssociationSubscriber {
 		// sets new association notifier
 		this.assocNotifier = source.getAssociationNotifier();
 
+		// create the subscriptions in the new association notifier
 		if(this.assocNotifier != null)
 			for (String nodeId : this.assocMap.getIdentifiers())
 				assocNotifier.subscribeToNode(this,nodeId);
@@ -783,6 +785,11 @@ public class EOMiddleware implements AssociationSubscriber {
 							// than the middleware can close
 							if (rr.isEmpty() && sr.isEmpty() && algoQueue.isEmpty()) {
 								try {
+									// remove all subscriptions from the notifier
+									if(EOMiddleware.this.assocNotifier != null)
+										for (String nodeId : EOMiddleware.this.assocMap.getIdentifiers())
+											EOMiddleware.this.assocNotifier.unsubscribeFromNode(EOMiddleware.this,nodeId);
+
 									deliveryLck.lock();
 									try{
 										stateLck.lock();
