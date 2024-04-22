@@ -42,7 +42,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	private Map<String, SendRecord> sr = new ConcurrentHashMap<>();
 	private Map<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
 	private DatagramSocket sk;
-	private int N, P;
+	private int P, // base window-size for the flow control
+				N; // base number of slots that should be requested
 	private final int maxAcks = 1;
 	private final int MTUSize = 1400;
 	private final int REQSLOT = 1, SLOT = 2, TOKEN = 3, ACK = 4;
@@ -783,15 +784,21 @@ public class EOMiddleware implements AssociationSubscriber {
 							if (rr.isEmpty() && sr.isEmpty() && algoQueue.isEmpty()) {
 								try {
 									deliveryLck.lock();
-									// sets the closed state
-									setState(CLOSED);
+									try{
+										stateLck.lock();
+										// sets the closed state
+										state = CLOSED;
+										// Closes the socket. Throws SocketException for
+										// the ReaderThread to stop waiting for a datagram.
+										sk.close();
+									}finally {
+										stateLck.unlock();
+									}
 									// Signals all possible client threads
 									// waiting for a client message.
 									deliveryCond.signalAll();
 								}finally { deliveryLck.unlock(); }
-								// Closes the socket. Throws SocketException for
-								// the ReaderThread to stop waiting for a datagram.
-								sk.close();
+
 								// interrupts the reader thread and
 								// waits for it before returning
 								readerThread.interrupt();
@@ -823,7 +830,8 @@ public class EOMiddleware implements AssociationSubscriber {
 					pq.add(new ReqSlotsEvent(j, msgTimeout(currentTime, c.RTT, reqSlotsMultiplier), currentTime));
 					netSend(j, new ReqSlotsMsg(id, j, c.sck, n, e, c.RTT));
 				}
-				// There are no messages and the number of envelopes equals N (base number of slots that should be requested)
+				// There are no messages and the number of envelopes equals N,
+				// which is the base number of slots that should be requested
 				else if (c.tok.size() == 0 && c.msg.size() == 0) {
 					netSend(j, new ReqSlotsMsg(id, j, c.sck, 0, c.sck, c.RTT));
 					ck = Math.max(ck, c.sck);
@@ -993,7 +1001,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			}
 			long duration = System.currentTimeMillis() - start;
 			double mps = bandwidthIterations / (duration / 1000.0f);
-			double bandwidth = mps * leng * 8 / 1000000;
+			double bandwidth = mps * leng * 8 / 1000000; // bandwidth in megabits per second
 			System.out.println("Bandwidth: " + bandwidth + ", mps: " + mps + ", TCP_RTT: " + TCP_RTT);
 			p = (int) ((bandwidth * 1000000 / 8) * (TCP_RTT / 1000)) / leng;
 			writer.println(p);

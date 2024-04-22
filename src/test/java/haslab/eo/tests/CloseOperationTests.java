@@ -13,7 +13,7 @@ import java.util.stream.Stream;
 
 import static java.lang.Thread.sleep;
 
-public class CloseOperation {
+public class CloseOperationTests {
     @Test
     public void sendAfterClose(){
         try {
