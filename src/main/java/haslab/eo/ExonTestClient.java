@@ -29,7 +29,7 @@ public class ExonTestClient {
             scanner.nextLine(); // ignore new line that comes from submitting the port number
         }
 
-        EOMiddleware eoMiddleware = EOMiddleware.start(id, null, port);
+        EOMiddleware eoMiddleware = EOMiddleware.start(id, null, port, null);
         try {
             String assocSrcFP = "staticTopology.csv";
             if(args.length >= 3)

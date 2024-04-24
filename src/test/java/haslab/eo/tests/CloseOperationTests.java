@@ -17,7 +17,7 @@ public class CloseOperationTests {
     @Test
     public void sendAfterClose(){
         try {
-            EOMiddleware node = EOMiddleware.start("node", "localhost", 22222);
+            EOMiddleware node = EOMiddleware.start("node", "localhost", 22222, null);
             node.closeNoWait();
             node.send("node2", "Hello World!".getBytes());
         } catch (RuntimeException e) {
@@ -45,7 +45,7 @@ public class CloseOperationTests {
 
             Thread ctThread = new Thread(() -> {
                 try {
-                    EOMiddleware clientEO = EOMiddleware.start("client", "localhost", 22222);
+                    EOMiddleware clientEO = EOMiddleware.start("client", "localhost", 22222, null);
                     clientEO.registerAssociation("server", new TransportAddress("localhost", 11111));
                     for(int i = 0; i < nMsgs; i++)
                         clientEO.send("server", Integer.toString(i).getBytes());
@@ -58,7 +58,7 @@ public class CloseOperationTests {
             Thread svThread = new Thread(() -> {
                 try {
                     int msgCounter = 0;
-                    EOMiddleware serverEO = EOMiddleware.start("server", "localhost", 11111);
+                    EOMiddleware serverEO = EOMiddleware.start("server", "localhost", 11111, null);
                     serverEO.receive(5000); // wait for the first message to arrive
                     msgCounter++;
                     serverEO.close();
@@ -102,7 +102,7 @@ public class CloseOperationTests {
 
             Thread ctThread = new Thread(() -> {
                 try {
-                    clientEO.set(EOMiddleware.start("client", "localhost", 22222));
+                    clientEO.set(EOMiddleware.start("client", "localhost", 22222, null));
                     clientEO.get().registerAssociation("server", new TransportAddress("localhost", 11111));
                     for(int i = 0; i < nMsgs; i++)
                         clientEO.get().send("server", Integer.toString(i).getBytes());
@@ -115,7 +115,7 @@ public class CloseOperationTests {
             Thread svThread = new Thread(() -> {
                 try {
                     int msgCounter = 0;
-                    serverEO.set(EOMiddleware.start("server", "localhost", 11111));
+                    serverEO.set(EOMiddleware.start("server", "localhost", 11111, null));
                     serverEO.get().receive(5000); // wait for the first message to arrive
                     msgCounter++;
                     serverEO.get().close();

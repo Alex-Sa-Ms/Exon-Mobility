@@ -49,6 +49,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	private Map<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
 	private DatagramSocket sk;
 	private int P, // base window-size for the flow control
+				N_Multiplier = 4, // N = P * N_Multiplier
 				N; // base number of slots that should be requested
 	private final int maxAcks = 1;
 	private final int MTUSize = 1400;
@@ -56,25 +57,17 @@ public class EOMiddleware implements AssociationSubscriber {
 	private final byte[] outData; // byte array used to send messages
 	private ByteBuffer bb;
 	private final int bbOffset; // marks where new data may start being written to the array. The node identifier and its length is written before this offset.
-	private boolean sendFirstTime = true, receiveFirstTime = true;
-
-	// for P calculations
-	private int tcpPort = 12121;
-	private int bandwidthIterations = 10000;
-	private int rttIterations = 100;
-	private int leng = 1024;
-	private int N_Multiplier = 4;
 
 	/* ***** Initialization & Constructors ***** */
 
-	private EOMiddleware(String identifier, String addr, int port) throws SocketException, UnknownHostException {
+	private EOMiddleware(String identifier, String addr, Integer port, Integer P) throws SocketException, UnknownHostException {
 		// If an identifier is not provided, a random identifier is created
 		this.id = identifier != null ? identifier : System.nanoTime() + "-" + UUID.randomUUID();
 
 		// if no bind address is provided, the wildcard address is used.
 		InetAddress address = addr != null ? InetAddress.getByName(addr) : null;
 
-		sk = new DatagramSocket(port, address);
+		sk = port != null ? new DatagramSocket(port, address) : new DatagramSocket();
 		sk.setReceiveBufferSize(2000000000);
 		System.out.println("UDP DatagramSocket Created: " + sk.getLocalAddress().getHostName() + ":" + sk.getLocalPort());
 
@@ -89,34 +82,37 @@ public class EOMiddleware implements AssociationSubscriber {
 		bb.putInt(this.id.length());
 		bb.put(this.id.getBytes());
 		bbOffset = Integer.BYTES + this.id.getBytes().length;
+
+
+		// if a null P is provided, uses conservative value,
+		// which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms
+		if(P == null) P = 100000000 * (50 / 1000) / (1000 * 8);
+		// sets P and N values
+		this.P = P;
+		this.N = P * N_Multiplier;
 	}
 
 	/**
 	 * Creates an instance of the middleware.
-	 * @param identifier Identifier of the node itself. Should be globally unique. If 'null' a random identifier is created.
+	 * @param identifier Identifier of the node itself. Should be globally unique.
+	 *                      If 'null' a random identifier is created.
 	 * @param address bind address. If 'null' the wildcard address is used.
-	 * @param port local port number for the UDP socket.
+	 * @param port local port number for the UDP socket. If 'null' the wildcard address
+	 *                and an available port are used.
+	 * @param P number of messages that can be in transit for each destination node.
+	 *             Can be calculated using the following formula: P = bandwidth * RTT / msg_size.
+	 *          	Should not be equal or lower than 0. If not provided, a conservative value is used,
+	 *          	which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms.
 	 * @return instance of the middleware
 	 * @throws SocketException
 	 * @throws UnknownHostException
+	 * @throws IllegalArgumentException if an invalid argument is provided.
 	 */
-	public static EOMiddleware start(String identifier, String address, int port) throws SocketException, UnknownHostException {
-		EOMiddleware eo = new EOMiddleware(identifier, address, port);
+	public static EOMiddleware start(String identifier, String address, Integer port, Integer P) throws SocketException, UnknownHostException {
+		EOMiddleware eo = new EOMiddleware(identifier, address, port, P);
 		eo.algoThread.start();
 		eo.readerThread.start();
 		return eo;
-	}
-
-	/**
-	 * Creates an instance of the middleware.
-	 * A random identifier is created for the socket (can be retrieved through the 'getIdentifier()' method)
-	 * @param port local port number for the UDP socket.
-	 * @return instance of the middleware
-	 * @throws SocketException
-	 * @throws UnknownHostException
-	 */
-	public static EOMiddleware start(int port) throws SocketException, UnknownHostException {
-		return start(null, null, port);
 	}
 
 	/* ***** Identifiers and endpoints ***** */
@@ -127,6 +123,14 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public String getIdentifier(){
 		return this.id;
+	}
+
+	public InetAddress getLocalAddress(){
+		return sk.getLocalAddress();
+	}
+
+	public int getLocalPort(){
+		return sk.getLocalPort();
 	}
 
 	/**
@@ -363,18 +367,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, boolean receipt) throws InterruptedException, IOException {
-		// TODO - need to define default N and P (talk with Prof)
-		//		In the midtime, always register the destination before sending a message
-		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
-
-		if (sendFirstTime) {
-			sendFirstTime = false;
-			P = calculatePSender(nodeId);
-			N = P * N_Multiplier;
-			System.out.println("P= " + P + ", N=" + N);
-			System.out.println("----------------------------------- \n");
-		}
-
 		SendRecord c = sr.get(nodeId);
 		boolean acquired = false;
 		if (c != null) {
@@ -427,14 +419,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, boolean receipt, long timeout) throws InterruptedException, IOException {
-		if (sendFirstTime) {
-			sendFirstTime = false;
-			P = calculatePSender(nodeId);
-			N = P * N_Multiplier;
-			System.out.println("P= " + P + ", N=" + N);
-			System.out.println("----------------------------------- \n");
-		}
-
 		// If a send record exists attempts to acquire a permit.
 		// If the operation of acquiring the permit times out,
 		//	returns null.
@@ -553,16 +537,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	public ClientMsg receive() throws InterruptedException {
-		if (receiveFirstTime) {
-			receiveFirstTime = false;
-			try {
-				P = calculatePReceiver();
-				N = P * N_Multiplier;
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
-
 		try {
 			deliveryLck.lock();
 			while(deliveryQueue.isEmpty()) {
@@ -589,16 +563,6 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws InterruptedException
 	 */
 	public ClientMsg receive(long timeout) throws InterruptedException {
-		if (receiveFirstTime) {
-			receiveFirstTime = false;
-			try {
-				P = calculatePReceiver();
-				N = P * N_Multiplier;
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
-
 		try {
 			long stopTime = System.currentTimeMillis() + timeout;
 			deliveryLck.lock();
@@ -1095,111 +1059,6 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("ReaderThread: Acabei!");
 			System.out.flush();
 		}
-	}
-
-	public int calculatePReceiver() throws IOException, InterruptedException {
-		long startTime = System.currentTimeMillis();
-		int p = 0;
-		try (ServerSocket serverSocket = new ServerSocket(tcpPort)) {
-			serverSocket.setSoTimeout(5000); // Set timeout in milliseconds
-			System.out.println("Testing the network...");
-
-			Socket socket = null;
-			boolean proceed = false;
-			while (!proceed) {
-				try {
-					socket = serverSocket.accept();
-					proceed = true;
-				} catch (SocketTimeoutException ste) {
-					// if either the delivery queue or the receive records structure
-					// are not empty, then messages have already been exchanged,
-					// therefore the method should not be hanging waiting for a connection.
-					// Handling this situation is required since a sender that attempts to
-					// perform the P calculation before a path between the sender and receiver
-					// exists, will probably "skip" the calculation has it was not possible to
-					// connect to the receiver within a timeout.
-					try {
-						deliveryLck.lock();
-						if (!deliveryQueue.isEmpty() || !rr.isEmpty())
-							return p;
-					}finally {
-						deliveryLck.unlock();
-					}
-				}
-			}
-
-			InputStream input = socket.getInputStream();
-			BufferedReader reader = new BufferedReader(new InputStreamReader(input));
-			OutputStream output = socket.getOutputStream();
-			PrintWriter writer = new PrintWriter(output, true);
-
-			// Calculating RTT
-			for (int i = 0; i < rttIterations; i++) {
-				String m = reader.readLine();
-				writer.println(m);
-			}
-			double TCP_RTT = Double.parseDouble(reader.readLine());// receive TCP_RTT
-
-			// Calculating bandwidth, and then P
-			long start = System.currentTimeMillis();
-			for (int i = 0; i < bandwidthIterations; i++) {
-				reader.readLine();
-			}
-			long duration = System.currentTimeMillis() - start;
-			double mps = bandwidthIterations / (duration / 1000.0f);
-			double bandwidth = mps * leng * 8 / 1000000; // bandwidth in megabits per second
-			System.out.println("Bandwidth: " + bandwidth + ", mps: " + mps + ", TCP_RTT: " + TCP_RTT);
-			p = (int) ((bandwidth * 1000000 / 8) * (TCP_RTT / 1000)) / leng;
-			writer.println(p);
-		} catch (IOException ex) {
-			System.out.println("Server exception: " + ex.getMessage());
-			ex.printStackTrace();
-		}
-		long time = System.currentTimeMillis() - startTime;
-		System.out.println("Time to calculate P: " + time + "ms.");
-		return p;
-	}
-
-	public int calculatePSender(String nodeId) {
-		long startTime = System.currentTimeMillis();
-		String m = new String(new char[leng]).replace('\0', ' ');
-		int p = 0;
-
-		TransportAddress taddr = getTransportAddress(nodeId);
-
-		if(taddr != null) {
-			try (Socket socket = new Socket(taddr.addr.getHostAddress(), tcpPort)) {
-				System.out.println("Testing the network...");
-				OutputStream output = socket.getOutputStream();
-				PrintWriter writer = new PrintWriter(output, true);
-				InputStream input = socket.getInputStream();
-				BufferedReader reader = new BufferedReader(new InputStreamReader(input));
-
-				// Calculating RTT
-				long start = System.currentTimeMillis();
-				for (int i = 0; i < rttIterations; i++) {
-					writer.println(" ");
-					reader.readLine();
-				}
-				long duration = System.currentTimeMillis() - start;
-				double tcpRTT = ((double) duration) / ((double) rttIterations);
-				writer.println(tcpRTT); // send TCP_RTT
-
-				// Calculating bandwidth, and then P
-				for (int i = 0; i < bandwidthIterations; i++) {
-					writer.println(m);
-				}
-				p = Integer.parseInt(reader.readLine());
-			} catch (UnknownHostException ex) {
-				System.out.println("Server not found: " + ex.getMessage());
-			} catch (IOException ex) {
-				System.out.println("I/O error: " + ex.getMessage());
-			}
-		}
-
-		long time = System.currentTimeMillis() - startTime;
-		System.out.println("Time to calculate P: " + time + "ms.");
-		return p;
 	}
 }
 
