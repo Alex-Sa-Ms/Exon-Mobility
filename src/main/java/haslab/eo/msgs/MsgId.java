@@ -19,4 +19,11 @@ public class MsgId {
 		MsgId msgId = (MsgId) o;
         return this.id == msgId.id;
     }
+
+	@Override
+	public String toString() {
+		return "MsgId{" +
+				"id=" + id +
+				'}';
+	}
 }
