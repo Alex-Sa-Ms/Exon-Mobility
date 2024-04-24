@@ -17,6 +17,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -34,9 +35,16 @@ public class EOMiddleware implements AssociationSubscriber {
 	private final AlgoThread algoThread = new AlgoThread();
 	private final ReaderThread readerThread = new ReaderThread();
 
+	// for message identification and receipts
+	// 		- receipts are used to inform that a message sent has been received by the destination node.
+	private AtomicLong idCounter = new AtomicLong(Long.MIN_VALUE); // counter used to generate message identifiers
+	private Queue<MsgId> receiptsQueue = new ArrayDeque<>(Integer.MAX_VALUE); // queue to store receipts
+	private ReentrantLock receiptsLck = new ReentrantLock();
+	private Condition receiptsCond = receiptsLck.newCondition();
+
 	// for core algorithm
 	private BlockingQueue<AQMsg> algoQueue = new ArrayBlockingQueue<AQMsg>(1000000);
-	private Queue<DQMsg> deliveryQueue = new ArrayDeque<>(1000000);
+	private Queue<DQMsg> deliveryQueue = new ArrayDeque<>(1000000); // not a blocking queue because a custom lock is used to ensure thread-safe behaviour
 	private ReentrantLock deliveryLck = new ReentrantLock();
 	private Condition deliveryCond = deliveryLck.newCondition();
 	private Map<String, SendRecord> sr = new ConcurrentHashMap<>();
@@ -340,15 +348,22 @@ public class EOMiddleware implements AssociationSubscriber {
 
 	/**
 	 * Creates message identifier for an outgoing message.
-	 * The message identifier is composed of the current time in nanoseconds, the identifier of the destination node and
-	 * the hash code of the message payload.
 	 * @return message identifier
 	 */
-	private MsgId createOutgoingMsgId(String nodeId, byte[] payload){
-		return new MsgId(nodeId, System.nanoTime(), payload.hashCode());
+	private MsgId createOutgoingMsgId(){
+		return new MsgId(idCounter.getAndIncrement());
 	}
 
-	public MsgId send(String nodeId, byte[] msg) throws InterruptedException, IOException {
+	/**
+	 * Sends the provided payload. The send operation can block due to the flow control mechanism.
+	 * @param nodeId identifier of the destination node
+	 * @param msg payload
+	 * @param receipt 'true' if a receipt is desired. 'false' otherwise.
+	 * @return The identifier of the message if a receipt is desired. 'null' otherwise.
+	 * @throws InterruptedException
+	 * @throws IOException
+	 */
+	public MsgId send(String nodeId, byte[] msg, boolean receipt) throws InterruptedException, IOException {
 		// TODO - need to define default N and P (talk with Prof)
 		//		In the midtime, always register the destination before sending a message
 		//if (sendFirstTime && assocMap.hasIdentifier(nodeId)) {
@@ -377,7 +392,8 @@ public class EOMiddleware implements AssociationSubscriber {
 				// is performed after invoking the close() method
 				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
 			}
-			MsgId msgId = createOutgoingMsgId(nodeId, msg);
+			// generates message identifier if a receipt was requested
+			MsgId msgId = receipt ? createOutgoingMsgId() : null;
 			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
 			algoQueue.put(aqm);
 			return msgId;
@@ -387,17 +403,31 @@ public class EOMiddleware implements AssociationSubscriber {
 	}
 
 	/**
-	 * Sends the provided payload. As the send operation can block due to the flow control mechanism, a timeout may be provided to determine the maximum
-	 * amount of time that can be waited before giving up on queuing the message. In such case, the method returns 'null'. Otherwise, it returns the message id
-	 * generated for the queued message.
+	 * Sends the provided payload. The send operation can block due to the flow control mechanism.
 	 * @param nodeId identifier of the destination node
 	 * @param msg payload
-	 * @param timeout maximum time (in milliseconds) to wait for the message to be queued for a sending operation.
-	 * @return the identifier of the message or 'null' if timeout was reached.
 	 * @throws InterruptedException
 	 * @throws IOException
 	 */
-	public MsgId send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
+	public void send(String nodeId, byte[] msg) throws InterruptedException, IOException {
+		send(nodeId,msg,false);
+	}
+
+	/**
+	 * Sends the provided payload. As the send operation can block due to the flow control mechanism,
+	 * a timeout may be provided to determine the maximum amount of time that can be waited before
+	 * giving up on queuing the message. If the operation times out, a TimeoutException is thrown.
+	 * @param nodeId identifier of the destination node
+	 * @param msg payload
+	 * @param receipt 'true' if a receipt is desired. 'false' otherwise
+	 * @param timeout maximum time (in milliseconds) to wait for the message to be
+	 *                   queued for a sending operation.
+	 * @return The identifier of the message if a receipt is desired. 'null' otherwise.
+	 * @throws TimeoutException if the operation timed out
+	 * @throws InterruptedException
+	 * @throws IOException
+	 */
+	public MsgId send(String nodeId, byte[] msg, boolean receipt, long timeout) throws InterruptedException, IOException, TimeoutException {
 		if (sendFirstTime) {
 			sendFirstTime = false;
 			P = calculatePSender(nodeId);
@@ -413,7 +443,7 @@ public class EOMiddleware implements AssociationSubscriber {
 		boolean acquired = false;
 		if (c != null) {
 			if (!c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
-				return null;
+				throw new TimeoutException();
 			else
 				acquired = true;
 		}
@@ -424,13 +454,30 @@ public class EOMiddleware implements AssociationSubscriber {
 				if(acquired) c.sem.release(); // release semaphore since a message won't be sent
 				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
 			}
-			MsgId msgId = createOutgoingMsgId(nodeId, msg);
+			// generates message identifier if a receipt was requested
+			MsgId msgId = receipt ? createOutgoingMsgId() : null;
 			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, msgId));
 			algoQueue.put(aqm);
 			return msgId;
 		}finally {
 			stateLck.unlock();
 		}
+	}
+
+	/**
+	 * Sends the provided payload. As the send operation can block due to the flow control mechanism,
+	 * a timeout may be provided to determine the maximum amount of time that can be waited before
+	 * giving up on queuing the message. If the operation times out, a TimeoutException is thrown.
+	 * @param nodeId identifier of the destination node
+	 * @param msg payload
+	 * @param timeout maximum time (in milliseconds) to wait for the message to be queued
+	 *                   for a sending operation.
+	 * @throws TimeoutException if the operation timed out
+	 * @throws InterruptedException
+	 * @throws IOException
+	 */
+	public void send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException, TimeoutException {
+		send(nodeId,msg,false,timeout);
 	}
 
 	public void debugPrints(){
@@ -526,10 +573,7 @@ public class EOMiddleware implements AssociationSubscriber {
 				deliveryCond.await();
 			}
 			DQMsg m = deliveryQueue.poll();
-			if(m != null)
-				return new ClientMsg(m.nodeId, m.msg);
-			else
-				return null;
+			return new ClientMsg(m.nodeId, m.msg);
 		} finally {
 			deliveryLck.unlock();
 		}
@@ -537,14 +581,14 @@ public class EOMiddleware implements AssociationSubscriber {
 
 	/**
 	 *
-	 * @param time Interval of time, in milliseconds,
+	 * @param timeout Interval of time, in milliseconds,
 	 *                   that the caller is willing to wait
 	 *                   for a message to be received.
 	 * @return message or 'null' if the time expired before a
 	 * 				message could have been received
 	 * @throws InterruptedException
 	 */
-	public ClientMsg receive(long time) throws InterruptedException{
+	public ClientMsg receive(long timeout) throws InterruptedException, TimeoutException {
 		if (receiveFirstTime) {
 			receiveFirstTime = false;
 			try {
@@ -556,25 +600,123 @@ public class EOMiddleware implements AssociationSubscriber {
 		}
 
 		try {
-			long stopTime = System.currentTimeMillis() + time;
+			long stopTime = System.currentTimeMillis() + timeout;
 			deliveryLck.lock();
-			while(deliveryQueue.isEmpty() && time > 0) {
+			while(deliveryQueue.isEmpty() && timeout > 0) {
 				// Throws a runtime exception if an attempt of receiving a message is performed
 				// after the middleware is closed.
 				if(getState() == CLOSED)
 					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
-				deliveryCond.await(time, TimeUnit.MILLISECONDS);
-				time = stopTime - System.currentTimeMillis();
+				deliveryCond.await(timeout, TimeUnit.MILLISECONDS);
+				timeout = stopTime - System.currentTimeMillis();
 			}
 			DQMsg m = deliveryQueue.poll();
 			if(m != null)
 				return new ClientMsg(m.nodeId, m.msg);
 			else
-				return null;
+				throw new TimeoutException();
 		} finally {
 			deliveryLck.unlock();
 		}
 	}
+
+	/* ***** Check receipts ***** */
+
+	/**
+	 * Emits a receipt, i.e., adds a receipt to the receipts queue.
+	 * @param receipt receipt to be added to the queue
+	 */
+	private void emitReceipt(MsgId receipt){
+		try{
+			receiptsLck.lock();
+			receiptsQueue.add(receipt);
+			receiptsCond.signal();
+		}finally {
+			receiptsLck.unlock();
+		}
+	}
+
+	/**
+	 * Waits for a receipt to be available and returns it.
+	 * @return a receipt, i.e., an identifier of a message
+	 * that has been received by the destination node.
+	 * @throws InterruptedException
+	 */
+	public MsgId takeReceipt() throws InterruptedException {
+		try{
+			receiptsLck.lock();
+			while (receiptsQueue.isEmpty()){
+				// Throws a runtime exception if an attempt of polling a receipt is performed
+				// after the middleware is closed.
+				if(getState() == CLOSED)
+					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+				receiptsCond.await();
+			}
+			return receiptsQueue.poll();
+		}finally {
+			receiptsLck.unlock();
+		}
+	}
+
+	/**
+	 * This method checks if there's a receipt available.
+	 * If there is, returns it immediately; otherwise, returns null.
+	 * @return a receipt, i.e., an identifier of a message
+	 * that has been received by the destination node.
+	 */
+	public MsgId pollReceipt(){
+		try{
+			receiptsLck.lock();
+			return receiptsQueue.poll();
+		}finally {
+			receiptsLck.unlock();
+		}
+	}
+
+	/**
+	 * Waits a given amount time for a receipt to be available.
+	 * If the time expires, throws a TimeoutException.
+	 * @return a receipt, i.e., an identifier of a message
+	 * that has been received by the destination node.
+	 * @throws InterruptedException
+	 * @throws TimeoutException If the operation times out.
+	 */
+	public MsgId pollReceipt(long timeout) throws InterruptedException, TimeoutException {
+		try{
+			long stopTime = System.currentTimeMillis() + timeout;
+			receiptsLck.lock();
+			while (receiptsQueue.isEmpty() && timeout > 0){
+				// Throws a runtime exception if an attempt of polling a receipt is performed
+				// after the middleware is closed.
+				if(getState() == CLOSED)
+					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+				receiptsCond.await(timeout, TimeUnit.MILLISECONDS);
+				timeout = stopTime - System.currentTimeMillis();
+			}
+			if(timeout <= 0)
+				throw new TimeoutException();
+			else
+				return receiptsQueue.poll();
+		}finally {
+			receiptsLck.unlock();
+		}
+	}
+
+	/**
+	 * This method checks if the specified receipt is present in the receipts queue.
+	 * If it is, removes the receipt from the queue and returns 'true'; otherwise, returns 'false'.
+	 * @param receipt the receipt of interest
+	 * @return 'true' if the specified receipt was present in the queue; 'false' otherwise.
+	 */
+	public boolean pollReceipt(MsgId receipt){
+		try{
+			receiptsLck.lock();
+			return receiptsQueue.remove(receipt);
+		}finally {
+			receiptsLck.unlock();
+		}
+	}
+
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
@@ -611,7 +753,7 @@ public class EOMiddleware implements AssociationSubscriber {
 							byte[] msg = eom.msg;
 							SendRecord c = sr.get(j);
 							if (c == null) {
-								SendRecord s = new SendRecord(ck, 0, msg);
+								SendRecord s = new SendRecord(ck, 0, eom);
 								s.sem = new Semaphore(P);
 								sr.put(j, s);
 								requestSlots(j);
@@ -621,12 +763,12 @@ public class EOMiddleware implements AssociationSubscriber {
 									if (c.envelopes.size() == (N - 1))
 										requestSlots(j);
 									TokenMsg tm = new TokenMsg(id, j, e, c.rck, msg);
-									TokenRecord tr = new TokenRecord(j, e, c.rck, msg, currentTime);
+									TokenRecord tr = new TokenRecord(j, e, c.rck, eom, currentTime);
 									c.tok.put(e, tr);
 									pq.add(new TokenEvent(j, tr, msgTimeout(currentTime, c.RTT, tokenMultiplier)));
 									netSend(j, tm);
 								} else
-									c.msg.add(msg);
+									c.msg.add(eom);
 							}
 						} else if (m.msg instanceof ReqSlotsMsg) {// ReqSlots Received
 							ReqSlotsMsg rm = (ReqSlotsMsg) m.msg;
@@ -675,9 +817,9 @@ public class EOMiddleware implements AssociationSubscriber {
 								c.sck = s + n;
 								while ((c.envelopes.size() != 0) && (c.msg.size() != 0)) {
 									long e = c.envelopes.dequeue();
-									byte[] msg = c.msg.poll();
-									TokenMsg tm = new TokenMsg(id, j, e, c.rck, msg);
-									TokenRecord tr = new TokenRecord(j, e, c.rck, msg, currentTime);
+									ClientMsg eom = c.msg.poll();
+									TokenMsg tm = new TokenMsg(id, j, e, c.rck, eom.msg);
+									TokenRecord tr = new TokenRecord(j, e, c.rck, eom, currentTime);
 									c.tok.put(e, tr);
 									pq.add(new TokenEvent(j, tr, msgTimeout(currentTime, c.RTT, tokenMultiplier)));
 									netSend(j, tm);
@@ -720,6 +862,9 @@ public class EOMiddleware implements AssociationSubscriber {
 										c.tok.remove(acks.get(i));
 										c.sem.release();
 										tr.acked = true;
+										// if the id of the message is not null, emit a receipt
+										if(tr.m.id != null)
+											emitReceipt(tr.m.id);
 									}
 								}
 							}
@@ -762,12 +907,12 @@ public class EOMiddleware implements AssociationSubscriber {
 								if (c != null) {
 									//System.out.println("c.rck:" + c.rck + " | tr.r" + tr.r + " | c.rck == tr.r : " + (c.rck == tr.r));
 									if ((c.rck == tr.r) && (c.tok.containsKey(tr.s))) {
-										if(retransmit % 20 == 0)
-											//System.out.println("Re-transmitting: " + retransmit);
+										//if(retransmit % 20 == 0)
+										//	System.out.println("Re-transmitting: " + retransmit);
 										retransmit++;
 										pq.add(new TokenEvent(j, tr,
 												msgTimeout(currentTime, c.RTT, tokenMultiplier * 3)));
-										netSend(j, new TokenMsg(id, j, tr.s, tr.r, tr.m));
+										netSend(j, new TokenMsg(id, j, tr.s, tr.r, tr.m.msg));
 									}
 								} //else System.out.println("c == null");
 							}
@@ -784,27 +929,30 @@ public class EOMiddleware implements AssociationSubscriber {
 							// if there are no records and there are no messages to process
 							// than the middleware can close
 							if (rr.isEmpty() && sr.isEmpty() && algoQueue.isEmpty()) {
-								try {
-									// remove all subscriptions from the notifier
-									if(EOMiddleware.this.assocNotifier != null)
-										for (String nodeId : EOMiddleware.this.assocMap.getIdentifiers())
-											EOMiddleware.this.assocNotifier.unsubscribeFromNode(EOMiddleware.this,nodeId);
+								// remove all subscriptions from the notifier
+								if(EOMiddleware.this.assocNotifier != null)
+									for (String nodeId : EOMiddleware.this.assocMap.getIdentifiers())
+										EOMiddleware.this.assocNotifier.unsubscribeFromNode(EOMiddleware.this,nodeId);
 
+								try {
+									// TODO - Ver se esta ordem não pode provocar deadlocks
+									stateLck.lock();
 									deliveryLck.lock();
-									try{
-										stateLck.lock();
-										// sets the closed state
-										state = CLOSED;
-										// Closes the socket. Throws SocketException for
-										// the ReaderThread to stop waiting for a datagram.
-										sk.close();
-									}finally {
-										stateLck.unlock();
-									}
+									receiptsLck.lock();
+									// sets the closed state
+									state = CLOSED;
+									// Closes the socket. Throws SocketException for
+									// the ReaderThread to stop waiting for a datagram.
+									sk.close();
 									// Signals all possible client threads
-									// waiting for a client message.
+									// waiting for a client message or a receipt.
 									deliveryCond.signalAll();
-								}finally { deliveryLck.unlock(); }
+									receiptsCond.signalAll();
+								}finally {
+									receiptsLck.unlock();
+									deliveryLck.unlock();
+									stateLck.unlock();
+								}
 
 								// interrupts the reader thread and
 								// waits for it before returning
