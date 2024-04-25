@@ -83,13 +83,17 @@ public class EOMiddleware implements AssociationSubscriber {
 		bb.put(this.id.getBytes());
 		bbOffset = Integer.BYTES + this.id.getBytes().length;
 
-
-		// if a null P is provided, uses conservative value,
-		// which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms
-		if(P == null) P = 100000000 * (50 / 1000) / (1000 * 8);
 		// sets P and N values
-		this.P = P;
-		this.N = P * N_Multiplier;
+		// If the provided P is 'null', a conservative value for P is defined,
+		// which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms
+		if(P == null) {
+			this.P = (int) (100000000f * (50f / 1000f) / (1000f * 8f));
+		} else {
+			if(P <= 0)
+				throw new IllegalArgumentException("P must be a 'null' or a positive integer.");
+			this.P = P;
+		}
+		this.N = this.P * N_Multiplier;
 	}
 
 	/**

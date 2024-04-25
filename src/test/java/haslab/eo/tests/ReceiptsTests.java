@@ -230,22 +230,22 @@ public class ReceiptsTests {
         // It also requests a random amount of receipts.
         ClientMsg msg;
         int counter = 0;
-        while((msg = server.receive(5000)) != null){
+        while(counter != nIters && (msg = server.receive(5000)) != null){
             counter++;
             receipt = random.nextBoolean();
             msgId = server.send("client", ("Received " + new String(msg.msg)).getBytes(), receipt);
             if(receipt) serverMsgIds.add(msgId);
         }
-        assert counter == nIters;
+        assert server.receive(0) == null; // check that no more msgs are available
         System.out.println("Number of receipts asked by the server: " + serverMsgIds.size());
         System.out.flush();
 
         // checks if the polled receipts match the asked receipts
-        while((msgId = client.pollReceipt(5000)) != null)
+        while((msgId = client.pollReceipt(500)) != null)
             assert clientMsgIds.remove(msgId);
         assert clientMsgIds.size() == 0;
 
-        while((msgId = server.pollReceipt(5000)) != null)
+        while((msgId = server.pollReceipt(500)) != null)
             assert serverMsgIds.remove(msgId);
         assert serverMsgIds.size() == 0;
     }
