@@ -114,6 +114,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	 */
 	public static EOMiddleware start(String identifier, String address, Integer port, Integer P) throws SocketException, UnknownHostException {
 		EOMiddleware eo = new EOMiddleware(identifier, address, port, P);
+		eo.recoverState(); // recovers state if it exists
 		eo.algoThread.start();
 		eo.readerThread.start();
 		return eo;
@@ -349,6 +350,47 @@ public class EOMiddleware implements AssociationSubscriber {
 			return state == RUNNING;
 		}finally { stateLck.unlock(); }
 	}
+
+	private String getStateBackupFileName(){
+		return id + ".eomback";
+	}
+
+	/**
+	 * Creates a state backup file, and persits the state of the instance.
+	 * Currently, as the instance is only closed when there are no send and receive
+	 * records, then the only value that needs to be saved is the clock.
+	 * Must be executed by the algoThread.
+	 */
+	private void persistState() throws IOException {
+		try {
+			DataOutputStream out = new DataOutputStream(new FileOutputStream(getStateBackupFileName(), false));
+			out.writeLong(algoThread.ck);
+			out.flush();
+			out.close();
+		}catch (IOException ioe){
+			System.out.println("Could not persist state. State clock: " + algoThread.ck);
+		}
+	}
+
+	/**
+	 * If there is a state backup file, recovers the state. Must be executed before starting the algoThread.
+	 * @return 'true' if state was recovered from the backup file.
+	 * 'false' if the file does not exist, or if the file is not valid.
+	 */
+	private boolean recoverState() {
+        try {
+			DataInputStream in = new DataInputStream(new FileInputStream(getStateBackupFileName()));
+			algoThread.ck = in.readLong();
+			in.close();
+			return true;
+		} catch (FileNotFoundException e) {
+			System.out.println("State backup file not found. No state was recovered.");
+            return false;
+        } catch (IOException e) {
+			System.out.println("Error: Could not read state backup file. No state was recovered.");
+			return false;
+        }
+    }
 
 	/* ***** Core functionality ***** */
 
@@ -678,6 +720,7 @@ public class EOMiddleware implements AssociationSubscriber {
 		}
 	}
 
+	/* ***** Algorithm Thread ***** */
 
 	class AlgoThread extends Thread {
 		private long ck = 0;
@@ -918,6 +961,9 @@ public class EOMiddleware implements AssociationSubscriber {
 								// waits for it before returning
 								readerThread.interrupt();
 								readerThread.join();
+
+								// persists state
+								persistState();
 								return;
 							}else pq.add(new CloseEvent(currentTime + closeTimeout));
 						}
