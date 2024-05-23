@@ -4,6 +4,7 @@ import haslab.eo.EOMiddleware;
 import haslab.eo.TransportAddress;
 import haslab.eo.associations.AssociationSource;
 import haslab.eo.associations.CsvAutoRefreshableAssociationSource;
+import haslab.eo.exceptions.ClosedException;
 import haslab.eo.msgs.ClientMsg;
 
 
@@ -12,9 +13,12 @@ import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ExonTestClient {
     public static void main(String[] args) throws IOException, InterruptedException {
+        AtomicBoolean debug = new AtomicBoolean(false),
+                      run = new AtomicBoolean(true);
         Scanner scanner = new Scanner(System.in);
         String id;
         int port;
@@ -40,7 +44,7 @@ public class ExonTestClient {
             System.out.println("Middleware initialized without an association source.");
         }
 
-        new Thread(() -> {
+        Thread t = new Thread(() -> {
             while (true) {
                 System.out.print("Command? ");
                 String line = scanner.nextLine();
@@ -93,16 +97,39 @@ public class ExonTestClient {
                     } catch (InterruptedException ie) {
                         System.out.println("There are no msgs to be received.");
                     }
+                } else if(line.equals("close")){
+                    try {
+                        debug.set(true);
+                        eoMiddleware.close();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    run.set(false);
+                    return;
                 }
             }
-        }).start();
+        });
+        t.start();
 
-        while (true) {
-            ClientMsg cMsg = eoMiddleware.receive(1000L);
-            if(cMsg != null) {
-                String msg = String.valueOf(StandardCharsets.UTF_8.decode(ByteBuffer.wrap(cMsg.msg)));
-                System.out.println("Received '" + msg + "' from '" + cMsg.nodeId);
-            }
+        long debugTime = System.currentTimeMillis(), now;
+
+        while (run.get()) {
+            try {
+                ClientMsg cMsg = eoMiddleware.receive(1000L);
+                if (cMsg != null) {
+                    String msg = String.valueOf(StandardCharsets.UTF_8.decode(ByteBuffer.wrap(cMsg.msg)));
+                    System.out.println("Received '" + msg + "' from '" + cMsg.nodeId);
+                }
+                if (debug.get()) {
+                    now = System.currentTimeMillis();
+                    if (debugTime <= now) {
+                        eoMiddleware.debugPrints();
+                        debugTime = now + 5000; // schedule next debug prints for after 5 seconds
+                    }
+                }
+            } catch (Exception ignored) {}
         }
+
+        t.join();
     }
 }

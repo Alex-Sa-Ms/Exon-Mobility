@@ -53,4 +53,9 @@ public interface AssociationSource {
      * @return association notifier, or 'null' if notifying events is not supported.
      */
     AssociationNotifier getAssociationNotifier();
+
+    /**
+     * To shut down the association source if required.
+     */
+    default void close(){}
 }

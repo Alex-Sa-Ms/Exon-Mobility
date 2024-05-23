@@ -367,6 +367,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			out.writeLong(algoThread.ck);
 			out.flush();
 			out.close();
+			System.out.println("State persisted in backup file: \"" + getStateBackupFileName() + "\"");
 		}catch (IOException ioe){
 			System.out.println("Could not persist state. State clock: " + algoThread.ck);
 		}
@@ -377,18 +378,16 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @return 'true' if state was recovered from the backup file.
 	 * 'false' if the file does not exist, or if the file is not valid.
 	 */
-	private boolean recoverState() {
+	private void recoverState() {
         try {
 			DataInputStream in = new DataInputStream(new FileInputStream(getStateBackupFileName()));
 			algoThread.ck = in.readLong();
 			in.close();
-			return true;
+			System.out.println("Recovered state through the backup file.");
 		} catch (FileNotFoundException e) {
 			System.out.println("State backup file not found. No state was recovered.");
-            return false;
         } catch (IOException e) {
 			System.out.println("Error: Could not read state backup file. No state was recovered.");
-			return false;
         }
     }
 
@@ -961,6 +960,9 @@ public class EOMiddleware implements AssociationSubscriber {
 								// waits for it before returning
 								readerThread.interrupt();
 								readerThread.join();
+
+								// close the association source
+								assocSrc.close();
 
 								// persists state
 								persistState();
