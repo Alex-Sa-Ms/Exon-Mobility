@@ -22,6 +22,7 @@ class SendRecord {
 	}
 
 	public String toString() {
-		return "sck: " + sck + ", rck: " + rck + ", msg: " + new String(msg.peek().msg);
+		ClientMsg m = msg.peek();
+		return "sck: " + sck + ", rck: " + rck + ", msg: " + (m != null ? new String(m.msg) : "null");
 	}
 }

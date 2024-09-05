@@ -48,9 +48,15 @@ public class EOMiddleware implements AssociationSubscriber {
 	private Map<String, SendRecord> sr = new ConcurrentHashMap<>();
 	private Map<String, ReceiveRecord> rr = new ConcurrentHashMap<>();
 	private DatagramSocket sk;
-	private int P, // base window-size for the flow control
-				N_Multiplier = 4, // N = P * N_Multiplier
-				N; // base number of slots that should be requested
+
+	// base window-size for the flow control.
+	// The default value is conservative. It assumes a bandwidth of 100Mbits/s,
+	// an RTT of 50 ms and an average message size of 1 KB.
+	private int P = (int) (100000000f * (50f / 1000f) / (1000f * 8f));
+	// N = P * N_Multiplier
+	private int N_Multiplier = 4;
+	// base number of slots that should be requested
+	private int N = P * N_Multiplier;
 	private final int maxAcks = 1;
 	private final int MTUSize = 1400;
 	private final int REQSLOT = 1, SLOT = 2, TOKEN = 3, ACK = 4;
@@ -60,7 +66,7 @@ public class EOMiddleware implements AssociationSubscriber {
 
 	/* ***** Initialization & Constructors ***** */
 
-	private EOMiddleware(String identifier, String addr, Integer port, Integer P) throws SocketException, UnknownHostException {
+	private EOMiddleware(String identifier, String addr, Integer port, Integer P, Integer N) throws SocketException, UnknownHostException {
 		// If an identifier is not provided, a random identifier is created
 		this.id = identifier != null ? identifier : System.nanoTime() + "-" + UUID.randomUUID();
 
@@ -84,16 +90,16 @@ public class EOMiddleware implements AssociationSubscriber {
 		bbOffset = Integer.BYTES + this.id.getBytes().length;
 
 		// sets P and N values
-		// If the provided P is 'null', a conservative value for P is defined,
-		// which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms
-		if(P == null) {
-			this.P = (int) (100000000f * (50f / 1000f) / (1000f * 8f));
-		} else {
+		if(P != null) {
 			if(P <= 0)
 				throw new IllegalArgumentException("P must be a 'null' or a positive integer.");
 			this.P = P;
 		}
-		this.N = this.P * N_Multiplier;
+		if(N != null) {
+			if(N <= 0)
+				throw new IllegalArgumentException("N must be a 'null' or a positive integer.");
+			this.N = N;
+		}
 	}
 
 	/**
@@ -107,17 +113,34 @@ public class EOMiddleware implements AssociationSubscriber {
 	 *             Can be calculated using the following formula: P = bandwidth * RTT / msg_size.
 	 *          	Should not be equal or lower than 0. If not provided, a conservative value is used,
 	 *          	which assumes a bandwidth of 100Mbits/s and an RTT of 50 ms.
+	 * @param N number of
 	 * @return instance of the middleware
 	 * @throws SocketException
 	 * @throws UnknownHostException
 	 * @throws IllegalArgumentException if an invalid argument is provided.
 	 */
-	public static EOMiddleware start(String identifier, String address, Integer port, Integer P) throws SocketException, UnknownHostException {
-		EOMiddleware eo = new EOMiddleware(identifier, address, port, P);
+	public static EOMiddleware start(String identifier, String address, Integer port, Integer P, Integer N) throws SocketException, UnknownHostException {
+		EOMiddleware eo = new EOMiddleware(identifier, address, port, P, N);
 		eo.recoverState(); // recovers state if it exists
 		eo.algoThread.start();
 		eo.readerThread.start();
 		return eo;
+	}
+
+	public static EOMiddleware start(String identifier, String address, Integer port, Integer P) throws SocketException, UnknownHostException{
+		return start(identifier, address, port, P, null);
+	}
+
+	public static EOMiddleware start(String identifier, String address, Integer port) throws SocketException, UnknownHostException{
+		return start(identifier, address, port, null, null);
+	}
+
+	public static EOMiddleware start(String identifier, Integer port, Integer P) throws SocketException, UnknownHostException{
+		return start(identifier, null, port, P, null);
+	}
+
+	public static EOMiddleware start(String identifier, Integer port) throws SocketException, UnknownHostException{
+		return start(identifier, null, port, null, null);
 	}
 
 	/* ***** Identifiers and endpoints ***** */
@@ -530,7 +553,7 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("slots is empty?:" + entry.getValue().slt.isEmpty());
 		}
 		System.out.println("\n----------- Delivery Queue -----------");
-		System.out.println("size: " + deliveryQueue.size() + "\n" + deliveryQueue);
+		System.out.println("size: " + deliveryQueue.size() /* + "\n" + deliveryQueue*/);
 		System.out.flush();
 	}
 
@@ -558,16 +581,15 @@ public class EOMiddleware implements AssociationSubscriber {
 			bb.putInt(TOKEN).putLong(tm.s).putLong(tm.r).put(tm.payload);
 			//System.out.println("Sent TOKEN (s=" + tm.s + ", r=" + tm.r +", payload=" + StandardCharsets.UTF_8.decode(ByteBuffer.wrap(tm.payload)) + ") to " + destId);
 		} else if (m instanceof AcksMsg) {
-			String print;
 			AcksMsg am = (AcksMsg) m;
 			bb.putInt(ACK);
 			bb.putLong(am.r);
-			print = "Sent ACK (r=" + am.r;
+			//String print = "Sent ACK (r=" + am.r;
 			for (int i = 0; i < am.acks.size(); i++) {
 				bb.putLong(am.acks.get(i));
-				print += ", " + am.acks.get(i);
+				//print += ", " + am.acks.get(i);
 			}
-			print += ") to " + destId;
+			//print += ") to " + destId;
 			//System.out.println(print);
 		}
 
@@ -757,7 +779,7 @@ public class EOMiddleware implements AssociationSubscriber {
 							SendRecord c = sr.get(j);
 							if (c == null) {
 								SendRecord s = new SendRecord(ck, 0, eom);
-								s.sem = new Semaphore(P);
+								s.sem = new Semaphore(P - 1);
 								sr.put(j, s);
 								requestSlots(j);
 							} else {
@@ -962,7 +984,8 @@ public class EOMiddleware implements AssociationSubscriber {
 								readerThread.join();
 
 								// close the association source
-								assocSrc.close();
+								if(assocSrc != null)
+									assocSrc.close();
 
 								// persists state
 								persistState();
