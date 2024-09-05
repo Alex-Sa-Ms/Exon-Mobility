@@ -1,13 +1,11 @@
 package haslab.eo.msgs;
 
-import haslab.eo.NodeId;
-
 public class AQMsg {
-	public final NodeId node;
+	public final String nodeId;
 	public final Msg msg;
 
-	public AQMsg(NodeId node, Msg msg) {
-		this.node = node;
+	public AQMsg(String nodeId, Msg msg) {
+		this.nodeId = nodeId;
 		this.msg = msg;
 	}
 }

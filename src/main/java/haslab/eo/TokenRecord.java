@@ -1,13 +1,15 @@
 package haslab.eo;
 
+import haslab.eo.msgs.ClientMsg;
+
 public class TokenRecord {
 	long s, r, time;
-	byte[] m;
-	NodeId node;
+	ClientMsg m;
+	String nodeId;
 	boolean acked;
 
-	public TokenRecord(NodeId node, long s, long r, byte[] m, long time) {
-		this.node = node;
+	public TokenRecord(String nodeId, long s, long r, ClientMsg m, long time) {
+		this.nodeId = nodeId;
 		this.s = s;
 		this.r = r;
 		this.m = m;

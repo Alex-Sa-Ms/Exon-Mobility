@@ -2,12 +2,12 @@ package haslab.eo.msgs;
 
 import java.io.Serializable;
 
-import haslab.eo.NodeId;
+
 
 public class NetMsg extends Msg implements Serializable {
-	NodeId node;
-	public NetMsg(NodeId node) {
-		this.node = node;
+	String srcId;
+	String destId;
+	public NetMsg(String srcId, String destId) {
+		this.srcId = srcId;
 	}
-
 }

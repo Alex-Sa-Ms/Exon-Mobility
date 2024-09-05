@@ -1,0 +1,83 @@
+package haslab.eo.associations;
+
+import haslab.eo.TransportAddress;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Should be used alongside locks to ensure consistency.
+ */
+public class IdentifierToAddressBiMap {
+
+    private Map<String, TransportAddress> idToAddrMap;
+    private Map<TransportAddress, String> addrToIdMap;
+
+    public IdentifierToAddressBiMap() {
+        this.idToAddrMap = new HashMap<>();
+        this.addrToIdMap = new HashMap<>();
+    }
+
+    public String getIdentifier(TransportAddress taddr) {
+        return addrToIdMap.get(taddr);
+    }
+
+    public TransportAddress getAddress(String nodeId) {
+        return idToAddrMap.get(nodeId);
+    }
+
+    public void put(String newId, TransportAddress newAddr) {
+        // remove previous associations if existent
+        String oldId = addrToIdMap.get(newAddr);
+        if (oldId != null)
+            idToAddrMap.remove(oldId);
+
+        TransportAddress oldAddr = idToAddrMap.get(newId);
+        if (oldAddr != null)
+            addrToIdMap.remove(oldAddr);
+
+        // creates the association
+        idToAddrMap.put(newId, newAddr);
+        addrToIdMap.put(newAddr, newId);
+    }
+
+    public boolean hasIdentifier(String nodeId){
+        return idToAddrMap.containsKey(nodeId);
+    }
+
+    public boolean hasAddress(TransportAddress taddr){
+        return addrToIdMap.containsKey(taddr);
+    }
+
+    public void removeId(String nodeId) {
+        TransportAddress taddr = idToAddrMap.get(nodeId);
+        idToAddrMap.remove(nodeId);
+        addrToIdMap.remove(taddr);
+    }
+
+    public void removeAddress(TransportAddress taddr) {
+        String nodeId = addrToIdMap.get(taddr);
+        addrToIdMap.remove(taddr);
+        idToAddrMap.remove(nodeId);
+    }
+
+    public Set<Map.Entry<String, TransportAddress>> entrySet() {
+        return idToAddrMap.entrySet();
+    }
+
+    public Set<String> getIdentifiers() {
+        return idToAddrMap.keySet();
+    }
+
+    public Set<TransportAddress> getAddresses() {
+        return addrToIdMap.keySet();
+    }
+
+    public IdentifierToAddressBiMap clone(){
+        IdentifierToAddressBiMap newMap = new IdentifierToAddressBiMap();
+        for(Map.Entry<String,TransportAddress> e : this.idToAddrMap.entrySet())
+            newMap.put(e.getKey(), e.getValue());
+        return newMap;
+    }
+}

@@ -1,13 +1,29 @@
 package haslab.eo.msgs;
 
-import haslab.eo.NodeId;
+import java.util.Objects;
 
+// Used to identify outgoing messages.
+// Incoming messages do not need an identifier.
 public class MsgId {
-	public final NodeId node;
-	public final long clock;
+	public final long id;
 
-	public MsgId(NodeId node, long clock) {
-		this.node = node;
-		this.clock = clock;
+	public MsgId(long id) {
+        this.id = id;
+    }
+
+	@Override
+	public boolean equals(Object o) {
+		if (this == o) return true;
+		if (o == null || getClass() != o.getClass()) return false;
+
+		MsgId msgId = (MsgId) o;
+        return this.id == msgId.id;
+    }
+
+	@Override
+	public String toString() {
+		return "MsgId{" +
+				"id=" + id +
+				'}';
 	}
 }

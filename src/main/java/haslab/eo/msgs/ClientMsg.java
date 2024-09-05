@@ -1,14 +1,19 @@
 package haslab.eo.msgs;
 
-import haslab.eo.NodeId;
-
 public class ClientMsg extends Msg {
-	public final NodeId node;
+	public final String nodeId;
 	public final byte[] msg;
-	//final MsgId id;
+	public final MsgId id;
 	
-	public ClientMsg(NodeId node, byte[] msg) {
-		this.node = node;
+	public ClientMsg(String nodeId, byte[] msg, MsgId id) {
+		this.nodeId = nodeId;
 		this.msg = msg;
+        this.id = id;
+    }
+
+	public ClientMsg(String nodeId, byte[] msg) {
+		this.nodeId = nodeId;
+		this.msg = msg;
+		this.id = null;
 	}
 }

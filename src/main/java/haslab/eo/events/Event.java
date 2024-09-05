@@ -1,13 +1,11 @@
 package haslab.eo.events;
 
-import haslab.eo.NodeId;
-
 public abstract class Event {
 	public long time;
-	public NodeId node;
+	public String nodeId;
 
-	public Event(NodeId node, long time) {
-		this.node = node;
+	public Event(String nodeId, long time) {
+		this.nodeId = nodeId;
 		this.time = time;
 	}
 }
