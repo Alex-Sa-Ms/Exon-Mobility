@@ -19,3 +19,7 @@ Exon has a combination of ingredients which allows ensuring exactly-once deliver
 - **No time-dependence for correctness**: Exon ensures exactly-once correctness without depending on any timeouts (such as for the TCP (TIME_WAIT state), using only timeouts for performance related decisions, such as deciding when to retransmit.
 - **Oblivious**: Exon achieves correctness without the need to keep connection-related information forever, keeping only a single integer per node as permanent state, when no soft-connections are present.
 - **Order-less**: to be more generic, Exon is deprived from unnecessary ordering restrictions of messages. Message ordering (e.g., FIFO) can easily be implemented on top of \pro if required.
+
+References
+---
+*Original Exon library project:* https://github.com/ziadkassam/Exon/
