@@ -553,11 +553,16 @@ public class EOMiddleware implements AssociationSubscriber {
 			System.out.println("slots is empty?:" + entry.getValue().slt.isEmpty());
 		}
 		System.out.println("\n----------- Delivery Queue -----------");
-		System.out.println("size: " + deliveryQueue.size() /* + "\n" + deliveryQueue*/);
+		System.out.println("size: " + deliveryQueue.size()); // + "\n" + deliveryQueue);
 		System.out.flush();
 	}
 
 	private boolean netSend(String destId, NetMsg m) throws IOException, InterruptedException {
+		// gets the transport address from the association map
+		TransportAddress taddr = getTransportAddress(destId);
+		if(taddr == null)
+			return false;
+
 		// Wraps outData array, and sets the offset and length assuming
 		//  that the node identifier and its length are already present in the array.
 		bb = ByteBuffer.wrap(outData, bbOffset, MTUSize - bbOffset);
@@ -592,11 +597,6 @@ public class EOMiddleware implements AssociationSubscriber {
 			//print += ") to " + destId;
 			//System.out.println(print);
 		}
-
-		// gets the transport address from the association map
-		TransportAddress taddr = getTransportAddress(destId);
-		if(taddr == null)
-			return false;
 
 		DatagramPacket sendPacket = new DatagramPacket(outData, bb.position(), taddr.addr, taddr.port);
 		sk.send(sendPacket);
@@ -746,6 +746,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	class AlgoThread extends Thread {
 		private long ck = 0;
 		private String j; // remote peer node identifier
+		// private Map<String, ReceiveRecord> rr = new HashMap<>(); // TODO - after debugging uncomment here and remove the concurrent version present in the middleware instance
 		private PriorityQueue<Event> pq = new PriorityQueue<Event>(100000, new TimeComparator());
 		private long timeout, currentTime, closeTimeout = 1000;
 		private int slotsTimeout = 50000;
