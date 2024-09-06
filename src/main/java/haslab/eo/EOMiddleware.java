@@ -528,8 +528,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * @throws InterruptedException
 	 * @throws IOException
 	 */
-	public void send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
-		send(nodeId,msg,false,timeout);
+	public boolean send(String nodeId, byte[] msg, long timeout) throws InterruptedException, IOException {
+		return send(nodeId,msg,false,timeout) != null;
 	}
 
 	public void debugPrints(){
