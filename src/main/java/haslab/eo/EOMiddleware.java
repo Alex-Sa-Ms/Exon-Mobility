@@ -122,6 +122,8 @@ public class EOMiddleware implements AssociationSubscriber {
 	public static EOMiddleware start(String identifier, String address, Integer port, Integer P, Integer N) throws SocketException, UnknownHostException {
 		EOMiddleware eo = new EOMiddleware(identifier, address, port, P, N);
 		eo.recoverState(); // recovers state if it exists
+		// register itself
+		eo.registerAssociation(identifier, new TransportAddress(eo.getLocalAddress(), eo.getLocalPort()));
 		eo.algoThread.start();
 		eo.readerThread.start();
 		return eo;
