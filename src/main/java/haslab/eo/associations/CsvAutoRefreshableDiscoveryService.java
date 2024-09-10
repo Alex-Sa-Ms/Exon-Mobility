@@ -10,9 +10,7 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -21,7 +19,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Expected line format: <node_id><delimiter><ip_address><delimiter><port_number>
  *     Example: nodeA;192.168.1.88;12345
  */
-public class CsvAutoRefreshableAssociationSource implements AssociationSource, AssociationNotifier{
+public class CsvAutoRefreshableDiscoveryService implements DiscoveryService, DiscoveryNotifier {
 
     private IdentifierToAddressBiMap assocMap = new IdentifierToAddressBiMap();
     private final ReadWriteLock assocLck = new ReentrantReadWriteLock();
@@ -31,14 +29,14 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
     private Thread refresher;
 
     /* Notifier attributes */
-    private Map<String, Set<AssociationSubscriber>> subscriptions = new ConcurrentHashMap<>(); // node specific subscriptions
-    private Map<AssociationSubscriber, AssociationSubscriber> globalSubscriptions = new ConcurrentHashMap<>(); // global subscriptions
+    private Map<String, Set<DiscoverySubscriber>> subscriptions = new ConcurrentHashMap<>(); // node specific subscriptions
+    private Map<DiscoverySubscriber, DiscoverySubscriber> globalSubscriptions = new ConcurrentHashMap<>(); // global subscriptions
     private Queue<AssociationEvent> assocEvents = new ArrayDeque<>();
 
-    private CsvAutoRefreshableAssociationSource() {}
+    private CsvAutoRefreshableDiscoveryService() {}
 
-    public static CsvAutoRefreshableAssociationSource create(String filepath, String delimiter) throws IOException {
-        CsvAutoRefreshableAssociationSource src = new CsvAutoRefreshableAssociationSource();
+    public static CsvAutoRefreshableDiscoveryService create(String filepath, String delimiter) throws IOException {
+        CsvAutoRefreshableDiscoveryService src = new CsvAutoRefreshableDiscoveryService();
         src.assocMap = readMappingsFromFile(filepath, delimiter);
         src.filepath = filepath;
         src.delimiter = delimiter;
@@ -213,7 +211,7 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
     }
 
     @Override
-    public AssociationNotifier getAssociationNotifier() {
+    public DiscoveryNotifier getAssociationNotifier() {
         return this;
     }
 
@@ -221,14 +219,14 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
     /* ***** Association Notifier Methods ***** */
 
     @Override
-    public boolean subscribeToNode(AssociationSubscriber sub, String nodeId) {
+    public boolean subscribeToNode(DiscoverySubscriber sub, String nodeId) {
         // subscriber instance cannot be null
         if(sub == null)
             return false;
 
         // Adds subscriber to the set of the specified node.
         // If the set does not exist, creates it.
-        Set<AssociationSubscriber> subsIds = subscriptions.get(nodeId);
+        Set<DiscoverySubscriber> subsIds = subscriptions.get(nodeId);
         if(subsIds == null) {
             subsIds = new HashSet<>();
             subscriptions.put(nodeId, subsIds);
@@ -239,14 +237,14 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
     }
 
     @Override
-    public void unsubscribeFromNode(AssociationSubscriber sub, String nodeId) {
-        Set<AssociationSubscriber> subsIds = subscriptions.get(nodeId);
+    public void unsubscribeFromNode(DiscoverySubscriber sub, String nodeId) {
+        Set<DiscoverySubscriber> subsIds = subscriptions.get(nodeId);
         if(subsIds != null)
             subsIds.remove(sub);
     }
 
     @Override
-    public void subscribeToAll(AssociationSubscriber sub) {
+    public void subscribeToAll(DiscoverySubscriber sub) {
         // subscriber instance cannot be null
         if(sub == null)
             return;
@@ -254,7 +252,7 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
     }
 
     @Override
-    public void unsubscribeFromAll(AssociationSubscriber sub) {
+    public void unsubscribeFromAll(DiscoverySubscriber sub) {
         globalSubscriptions.remove(sub);
     }
 
@@ -270,13 +268,13 @@ public class CsvAutoRefreshableAssociationSource implements AssociationSource, A
             ev = assocEvents.poll();
             if(ev != null) {
                 // gets node-specific subscriptions and notifies the subscribers
-                Set<AssociationSubscriber> subsIds = subscriptions.get(ev.nodeId);
+                Set<DiscoverySubscriber> subsIds = subscriptions.get(ev.nodeId);
                 if(subsIds != null)
-                    for (AssociationSubscriber sub : subsIds)
+                    for (DiscoverySubscriber sub : subsIds)
                         sub.notify(ev);
 
                 // gets global subscriptions and notifies the subscribers
-                for (AssociationSubscriber sub : this.globalSubscriptions.keySet())
+                for (DiscoverySubscriber sub : this.globalSubscriptions.keySet())
                     sub.notify(ev);
             }
         }

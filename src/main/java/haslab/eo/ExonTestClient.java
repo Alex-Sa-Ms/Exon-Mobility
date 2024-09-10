@@ -1,10 +1,7 @@
 package haslab.eo;
 
-import haslab.eo.EOMiddleware;
-import haslab.eo.TransportAddress;
-import haslab.eo.associations.AssociationSource;
-import haslab.eo.associations.CsvAutoRefreshableAssociationSource;
-import haslab.eo.exceptions.ClosedException;
+import haslab.eo.associations.DiscoveryService;
+import haslab.eo.associations.CsvAutoRefreshableDiscoveryService;
 import haslab.eo.msgs.ClientMsg;
 
 
@@ -38,7 +35,7 @@ public class ExonTestClient {
             String assocSrcFP = "staticTopology.csv";
             if(args.length >= 3)
                 assocSrcFP = args[2];
-            AssociationSource assocSrc = CsvAutoRefreshableAssociationSource.create(assocSrcFP, ";");
+            DiscoveryService assocSrc = CsvAutoRefreshableDiscoveryService.create(assocSrcFP, ";");
             eoMiddleware.setAssociationSource(assocSrc);
         }catch (Exception e) {
             System.out.println("Middleware initialized without an association source.");
@@ -69,7 +66,7 @@ public class ExonTestClient {
                         System.out.println("Filepath:");
                         String filepath = scanner.nextLine();
                         try {
-                            CsvAutoRefreshableAssociationSource src = CsvAutoRefreshableAssociationSource.create(filepath, ";");
+                            CsvAutoRefreshableDiscoveryService src = CsvAutoRefreshableDiscoveryService.create(filepath, ";");
                             eoMiddleware.setAssociationSource(src);
                         } catch (IOException ignored) {}
                     }

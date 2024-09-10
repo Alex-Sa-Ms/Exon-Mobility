@@ -3,7 +3,6 @@ package haslab.eo.associations;
 import haslab.eo.TransportAddress;
 
 import java.io.*;
-import java.net.InetAddress;
 
 /**
  * Static associations' source.
@@ -11,24 +10,24 @@ import java.net.InetAddress;
  * Expected line format: <node_id><delimiter><ip_address><delimiter><port_number>
  *     Example: nodeA;192.168.1.88;12345
  */
-public class CsvAssociationSource implements AssociationSource{
+public class CsvDiscoveryService implements DiscoveryService {
 
     private final IdentifierToAddressBiMap map = new IdentifierToAddressBiMap();
     private final String filepath;
     private final String delimiter;
 
-    private CsvAssociationSource(String filepath, String delimiter) {
+    private CsvDiscoveryService(String filepath, String delimiter) {
         this.filepath = filepath;
         this.delimiter = delimiter;
     }
 
-    public static CsvAssociationSource create(String filepath, String delimiter) throws IOException {
+    public static CsvDiscoveryService create(String filepath, String delimiter) throws IOException {
         if(filepath == null)
             throw new RuntimeException("File path cannot be null");
         if(delimiter == null)
             throw new RuntimeException("Delimiter cannot be null");
 
-        CsvAssociationSource src = new CsvAssociationSource(filepath, delimiter);
+        CsvDiscoveryService src = new CsvDiscoveryService(filepath, delimiter);
         BufferedReader reader = new BufferedReader(new FileReader(filepath));
 
         String line;
@@ -68,7 +67,7 @@ public class CsvAssociationSource implements AssociationSource{
     }
 
     @Override
-    public AssociationNotifier getAssociationNotifier() {
+    public DiscoveryNotifier getAssociationNotifier() {
         return null;
     }
 }

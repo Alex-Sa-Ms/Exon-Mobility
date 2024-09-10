@@ -3,9 +3,9 @@ package haslab.eo;
 import java.util.*;
 import java.util.concurrent.*;
 
-import haslab.eo.associations.AssociationNotifier;
-import haslab.eo.associations.AssociationSource;
-import haslab.eo.associations.AssociationSubscriber;
+import haslab.eo.associations.DiscoveryNotifier;
+import haslab.eo.associations.DiscoveryService;
+import haslab.eo.associations.DiscoverySubscriber;
 import haslab.eo.associations.IdentifierToAddressBiMapWithLock;
 import haslab.eo.associations.events.*;
 import haslab.eo.events.*;
@@ -19,12 +19,12 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
-public class EOMiddleware implements AssociationSubscriber {
+public class EOMiddleware implements DiscoverySubscriber {
 	// for transport address and node identifiers associations
 	private final String id; // identifier of the node
 	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
-	private AssociationSource assocSrc = null;
-	private AssociationNotifier assocNotifier = null;
+	private DiscoveryService assocSrc = null;
+	private DiscoveryNotifier assocNotifier = null;
 
 	// for graceful close operation
 	private final int RUNNING = 1, CLOSING = 2, CLOSED = 3;
@@ -145,6 +145,10 @@ public class EOMiddleware implements AssociationSubscriber {
 		return start(identifier, null, port, null, null);
 	}
 
+	DatagramSocket getDatagramSocket() {
+		return sk;
+	}
+
 	/* ***** Identifiers and endpoints ***** */
 
 	/**
@@ -240,7 +244,7 @@ public class EOMiddleware implements AssociationSubscriber {
 	 * association is not found locally.
 	 * @param source source of associations
 	 */
-	public void setAssociationSource(AssociationSource source){
+	public void setAssociationSource(DiscoveryService source){
 		// remove all subscriptions from the previous notifier
 		if(this.assocNotifier != null)
 			for (String nodeId : this.assocMap.getIdentifiers())

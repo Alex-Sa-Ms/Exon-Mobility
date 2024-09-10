@@ -1,6 +1,6 @@
 package haslab.eo.associations;
 
-public interface AssociationNotifier {
+public interface DiscoveryNotifier {
     /* ***** Events ***** */
 
     /*
@@ -27,14 +27,14 @@ public interface AssociationNotifier {
      * @return 'true' if a subscription was created successfully.
      *         'false' otherwise (if a node is not registered it cannot be subscribed).
      */
-    boolean subscribeToNode(AssociationSubscriber sub, String nodeId);
+    boolean subscribeToNode(DiscoverySubscriber sub, String nodeId);
 
     /**
      * Allows cancelling a previously made node subscription.
      * @param sub subscriber instance
      * @param nodeId node identifier
      */
-    void unsubscribeFromNode(AssociationSubscriber sub, String nodeId);
+    void unsubscribeFromNode(DiscoverySubscriber sub, String nodeId);
 
     /**
      * Allows subscribing to all events.
@@ -47,14 +47,14 @@ public interface AssociationNotifier {
      * in the specific subscription.
      * @param sub subscriber instance
      */
-    void subscribeToAll(AssociationSubscriber sub);
+    void subscribeToAll(DiscoverySubscriber sub);
 
     /**
      * Allows cancelling a previously made global subscription.
      * This does not remove the node-specific subscriptions.
      * @param sub subscriber instance
      */
-    void unsubscribeFromAll(AssociationSubscriber sub);
+    void unsubscribeFromAll(DiscoverySubscriber sub);
 
     void notifySubscribers();
 }

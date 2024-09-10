@@ -31,7 +31,7 @@ import haslab.eo.TransportAddress;
 /**
  * Interface that any source of associations must implement.
  */
-public interface AssociationSource {
+public interface DiscoveryService {
     /**
      * Gets the transport address associated with the given node identifier.
      * @param nodeId node identifier
@@ -52,7 +52,7 @@ public interface AssociationSource {
      * Gets the association notifier. The associations' source may not support the mechanism of notifying events related to nodes.
      * @return association notifier, or 'null' if notifying events is not supported.
      */
-    AssociationNotifier getAssociationNotifier();
+    DiscoveryNotifier getAssociationNotifier();
 
     /**
      * To shut down the association source if required.
