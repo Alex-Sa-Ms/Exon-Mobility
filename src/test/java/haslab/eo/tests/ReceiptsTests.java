@@ -7,10 +7,6 @@ import haslab.eo.msgs.MsgId;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.SocketException;
-import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
@@ -45,7 +41,7 @@ public class ReceiptsTests {
 
         // sleeps 1 second then registers the server to allow the message to be sent
         Thread.sleep(1000);
-        client.registerAssociation("server", new TransportAddress("localhost", serverPort));
+        client.registerNode("server", new TransportAddress("localhost", serverPort));
 
         // wait for thread to finish and check if it passed the tests
         t.join();
@@ -91,7 +87,7 @@ public class ReceiptsTests {
 
         // sleeps 1 second then registers the server to allow the message to be sent
         Thread.sleep(1000);
-        client.registerAssociation("server", new TransportAddress("localhost",serverPort));
+        client.registerNode("server", new TransportAddress("localhost",serverPort));
 
         // wait for thread to finish and check if it passed the tests
         t.join();
@@ -143,7 +139,7 @@ public class ReceiptsTests {
 
         // sleeps 1 second then registers the server to allow the message to be sent
         Thread.sleep(1000);
-        client.registerAssociation("server", new TransportAddress("localhost",serverPort));
+        client.registerNode("server", new TransportAddress("localhost",serverPort));
 
         // wait for thread to finish and check if it passed the tests
         t.join();
@@ -187,7 +183,7 @@ public class ReceiptsTests {
 
         // sleeps 1 second then registers the server to allow the message to be sent
         Thread.sleep(1000);
-        client.registerAssociation("server", new TransportAddress("localhost",serverPort));
+        client.registerNode("server", new TransportAddress("localhost",serverPort));
 
         // wait for thread to finish and check if it passed the tests
         t.join();
@@ -201,7 +197,7 @@ public class ReceiptsTests {
         int serverPort = 10009;
         EOMiddleware server = EOMiddleware.start("server", "localhost", serverPort, null),
                 client = EOMiddleware.start("client", "localhost", 10010, null);
-        client.registerAssociation("server", new TransportAddress("localhost",serverPort));
+        client.registerNode("server", new TransportAddress("localhost",serverPort));
 
         // Set of message ids that should get a receipt
         Set<MsgId> clientMsgIds = new HashSet<>(),

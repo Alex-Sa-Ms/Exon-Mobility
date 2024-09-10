@@ -36,7 +36,7 @@ public class ExonTestClient {
             if(args.length >= 3)
                 assocSrcFP = args[2];
             DiscoveryService assocSrc = CsvAutoRefreshableDiscoveryService.create(assocSrcFP, ";");
-            eoMiddleware.setAssociationSource(assocSrc);
+            eoMiddleware.setDiscoveryService(assocSrc);
         }catch (Exception e) {
             System.out.println("Middleware initialized without an association source.");
         }
@@ -58,7 +58,7 @@ public class ExonTestClient {
                         System.out.println("Port:");
                         int newPort = Integer.parseInt(scanner.nextLine());
                         try {
-                            eoMiddleware.registerAssociation(nodeId, new TransportAddress(newAddr, newPort));
+                            eoMiddleware.registerNode(nodeId, new TransportAddress(newAddr, newPort));
                         } catch (UnknownHostException e) {
                             throw new RuntimeException(e);
                         }
@@ -67,7 +67,7 @@ public class ExonTestClient {
                         String filepath = scanner.nextLine();
                         try {
                             CsvAutoRefreshableDiscoveryService src = CsvAutoRefreshableDiscoveryService.create(filepath, ";");
-                            eoMiddleware.setAssociationSource(src);
+                            eoMiddleware.setDiscoveryService(src);
                         } catch (IOException ignored) {}
                     }
                 } else if (line.equals("send")) {

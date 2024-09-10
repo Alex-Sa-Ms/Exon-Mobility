@@ -1,8 +1,10 @@
 package haslab.eo.tests;
 
 import haslab.eo.EOMiddleware;
+import haslab.eo.SocketsCleaner;
 import haslab.eo.TransportAddress;
 import haslab.eo.exceptions.ClosedException;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
@@ -14,10 +16,15 @@ import java.util.stream.Stream;
 import static java.lang.Thread.sleep;
 
 public class CloseOperationTests {
+    @BeforeEach
+    void closeDatagramSockets(){
+        SocketsCleaner.clean();
+    }
+
     @Test
     public void sendAfterClose(){
         try {
-            EOMiddleware node = EOMiddleware.start("node", "localhost", 22222, null);
+            EOMiddleware node = SocketsCleaner.add(EOMiddleware.start("node", "localhost", 22222, null));
             node.closeNoWait();
             node.send("node2", "Hello World!".getBytes());
         } catch (RuntimeException e) {
@@ -42,11 +49,10 @@ public class CloseOperationTests {
 
     private void closeDuringConversation(int nMsgs){
         try {
-
             Thread ctThread = new Thread(() -> {
                 try {
-                    EOMiddleware clientEO = EOMiddleware.start("client", "localhost", 22222, null);
-                    clientEO.registerAssociation("server", new TransportAddress("localhost", 11111));
+                    EOMiddleware clientEO = SocketsCleaner.add(EOMiddleware.start("client", "localhost", 22222, null));
+                    clientEO.registerNode("server", new TransportAddress("localhost", 11111));
                     for(int i = 0; i < nMsgs; i++)
                         clientEO.send("server", Integer.toString(i).getBytes());
                     clientEO.close();
@@ -58,7 +64,7 @@ public class CloseOperationTests {
             Thread svThread = new Thread(() -> {
                 try {
                     int msgCounter = 0;
-                    EOMiddleware serverEO = EOMiddleware.start("server", "localhost", 11111, null);
+                    EOMiddleware serverEO = SocketsCleaner.add(EOMiddleware.start("server", "localhost", 11111, null));
                     serverEO.receive(5000); // wait for the first message to arrive
                     msgCounter++;
                     serverEO.close();
@@ -93,7 +99,7 @@ public class CloseOperationTests {
         }
     }
 
-    @Test
+    //@Test
     public void DEBUG_closeDuringConversation(){
         int nMsgs = 500;
         try {
@@ -102,8 +108,8 @@ public class CloseOperationTests {
 
             Thread ctThread = new Thread(() -> {
                 try {
-                    clientEO.set(EOMiddleware.start("client", "localhost", 22222, null));
-                    clientEO.get().registerAssociation("server", new TransportAddress("localhost", 11111));
+                    clientEO.set(SocketsCleaner.add(EOMiddleware.start("client", "localhost", 22222, null)));
+                    clientEO.get().registerNode("server", new TransportAddress("localhost", 11111));
                     for(int i = 0; i < nMsgs; i++)
                         clientEO.get().send("server", Integer.toString(i).getBytes());
                     clientEO.get().close();
@@ -115,7 +121,7 @@ public class CloseOperationTests {
             Thread svThread = new Thread(() -> {
                 try {
                     int msgCounter = 0;
-                    serverEO.set(EOMiddleware.start("server", "localhost", 11111, null));
+                    serverEO.set(SocketsCleaner.add(EOMiddleware.start("server", "localhost", 11111, null)));
                     serverEO.get().receive(5000); // wait for the first message to arrive
                     msgCounter++;
                     serverEO.get().close();

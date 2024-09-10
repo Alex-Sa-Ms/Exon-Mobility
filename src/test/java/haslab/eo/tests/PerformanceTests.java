@@ -19,7 +19,7 @@ public class PerformanceTests {
         try {
             EOMiddleware sender = EOMiddleware.start("sender", null, null, P, N);
             EOMiddleware receiver = EOMiddleware.start("receiver", null, null, P, N);
-            sender.registerAssociation("receiver",new TransportAddress("localhost",receiver.getLocalPort()));
+            sender.registerNode("receiver",new TransportAddress("localhost",receiver.getLocalPort()));
 
             Semaphore sendSemaphore = new Semaphore(0);
             AtomicLong time = new AtomicLong(0L);

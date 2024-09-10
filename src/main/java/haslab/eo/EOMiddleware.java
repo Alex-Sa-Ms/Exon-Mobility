@@ -3,10 +3,7 @@ package haslab.eo;
 import java.util.*;
 import java.util.concurrent.*;
 
-import haslab.eo.associations.DiscoveryNotifier;
-import haslab.eo.associations.DiscoveryService;
-import haslab.eo.associations.DiscoverySubscriber;
-import haslab.eo.associations.IdentifierToAddressBiMapWithLock;
+import haslab.eo.associations.*;
 import haslab.eo.associations.events.*;
 import haslab.eo.events.*;
 import haslab.eo.msgs.*;
@@ -19,7 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
-public class EOMiddleware implements DiscoverySubscriber {
+public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	// for transport address and node identifiers associations
 	private final String id; // identifier of the node
 	private IdentifierToAddressBiMapWithLock assocMap = new IdentifierToAddressBiMapWithLock(); // map of associations. Associates node ids to transport addresses.
@@ -123,7 +120,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 		EOMiddleware eo = new EOMiddleware(identifier, address, port, P, N);
 		eo.recoverState(); // recovers state if it exists
 		// register itself
-		eo.registerAssociation(identifier, new TransportAddress(eo.getLocalAddress(), eo.getLocalPort()));
+		eo.registerNode(identifier, new TransportAddress(eo.getLocalAddress(), eo.getLocalPort()));
 		eo.algoThread.start();
 		eo.readerThread.start();
 		return eo;
@@ -173,7 +170,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 	 * @return the node identifier associated with the given transport address,
 	 * or 'null' if there is no such association.
 	 */
-	public String getIdentifier(TransportAddress taddr){
+	public String getNodeIdentifier(TransportAddress taddr){
 		String identifier = assocMap.getIdentifier(taddr);
 		if(assocSrc != null && identifier == null) {
 			identifier = assocSrc.getIdentifier(taddr);
@@ -199,7 +196,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 	 * @return the transport address associated with the given node identifier,
 	 * or 'null' if there is no such association.
 	 */
-	public TransportAddress getTransportAddress(String nodeId){
+	public TransportAddress getNodeTransportAddress(String nodeId){
 		TransportAddress taddr = assocMap.getAddress(nodeId);
 		if(assocSrc != null && taddr == null) {
 			taddr = assocSrc.getTransportAddress(nodeId);
@@ -228,7 +225,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 	 * @param nodeId identifier of a node
 	 * @param taddr transport address of a node
 	 */
-	public void registerAssociation(String nodeId, TransportAddress taddr) {
+	public void registerNode(String nodeId, TransportAddress taddr) {
 		// Creates the association, and removes any existent associations
 		this.assocMap.put(nodeId, taddr);
 
@@ -238,13 +235,21 @@ public class EOMiddleware implements DiscoverySubscriber {
 			this.assocNotifier.subscribeToNode(this, nodeId);
 	}
 
+	public void unregisterNode(String nodeId) {
+		// Removes the association
+		this.assocMap.removeId(nodeId);
+		// unsubscribe the node's association events
+		if(this.assocNotifier != null)
+			this.assocNotifier.unsubscribeFromNode(this, nodeId);
+	}
+
 	/**
 	 * Sets source of associations. May be 'null'.
 	 * The association source is consulted when an
 	 * association is not found locally.
 	 * @param source source of associations
 	 */
-	public void setAssociationSource(DiscoveryService source){
+	public void setDiscoveryService(DiscoveryService source){
 		// remove all subscriptions from the previous notifier
 		if(this.assocNotifier != null)
 			for (String nodeId : this.assocMap.getIdentifiers())
@@ -565,7 +570,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 
 	private boolean netSend(String destId, NetMsg m) throws IOException, InterruptedException {
 		// gets the transport address from the association map
-		TransportAddress taddr = getTransportAddress(destId);
+		TransportAddress taddr = getNodeTransportAddress(destId);
 		if(taddr == null)
 			return false;
 
@@ -1092,7 +1097,7 @@ public class EOMiddleware implements DiscoverySubscriber {
 						TransportAddress taddr = new TransportAddress(in_pkt.getAddress().getHostAddress(), in_pkt.getPort());
 
 						// update is only performed if needed, as to not slow other threads by using a write lock
-						if(!taddr.equals(getTransportAddress(srcId)))
+						if(!taddr.equals(getNodeTransportAddress(srcId)))
 							assocMap.put(srcId, taddr);
 
 						if (msgType == REQSLOT) {
