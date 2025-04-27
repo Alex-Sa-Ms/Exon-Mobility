@@ -12,6 +12,7 @@ import haslab.eo.exceptions.ClosedException;
 import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -27,8 +28,8 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	private final int RUNNING = 1, CLOSING = 2, CLOSED = 3;
 	private int state = RUNNING;
 	private ReentrantLock stateLck = new ReentrantLock();
-	private final AlgoThread algoThread = new AlgoThread();
-	private final ReaderThread readerThread = new ReaderThread();
+	private final AlgoThread algoThread;
+	private final ReaderThread readerThread;
 
 	// for message identification and receipts
 	// 		- receipts are used to inform that a message sent has been received by the destination node.
@@ -66,6 +67,9 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	private EOMiddleware(String identifier, String addr, Integer port, Integer P, Integer N) throws SocketException, UnknownHostException {
 		// If an identifier is not provided, a random identifier is created
 		this.id = identifier != null ? identifier : System.nanoTime() + "-" + UUID.randomUUID();
+
+		algoThread = new AlgoThread("Exon-AlgoThread-" + this.id);
+		readerThread = new ReaderThread("Exon-ReaderThread-" + this.id);
 
 		// if no bind address is provided, the wildcard address is used.
 		InetAddress address = addr != null ? InetAddress.getByName(addr) : null;
@@ -346,6 +350,12 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 		}finally { stateLck.unlock(); }
 	}
 
+	public void forceClose(){
+		algoThread.interrupt();
+		readerThread.interrupt();
+		sk.close();
+	}
+
 	private void setState(int newState){
 		try{
 			stateLck.lock();
@@ -435,6 +445,54 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 		return new MsgId(idCounter.getAndIncrement());
 	}
 
+	private MsgId _send(String nodeId, byte[] msg, boolean receipt, Long timeout) throws InterruptedException, IOException {
+		if(!Objects.equals(getIdentifier(), nodeId)) {
+			// If a send record exists attempts to acquire a permit.
+			// If the operation of acquiring the permit times out,
+			//	returns null.
+			SendRecord c = sr.get(nodeId);
+			boolean acquired = false;
+			if (c != null) {
+				if(timeout != null) {
+					if (!c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
+						return null;
+					else
+						acquired = true;
+				}else {
+					c.sem.acquire();
+					acquired = true;
+				}
+			}
+
+			try{
+				stateLck.lock();
+				if(state != RUNNING) {
+					if(acquired) c.sem.release(); // release semaphore since a message won't be sent
+					throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
+				}
+				// generates message identifier
+				MsgId msgId = createOutgoingMsgId();
+				// the identifier is only attached to the client message if a receipt was requested
+				AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, receipt ? msgId : null));
+				algoQueue.put(aqm);
+				return msgId;
+			}finally {
+				stateLck.unlock();
+			}
+		}else{
+			try {
+				deliveryLck.lock();
+				// generates message identifier
+				MsgId msgId = createOutgoingMsgId();
+				deliveryQueue.add(new DQMsg(nodeId, msg));
+				deliveryCond.signal();
+				return msgId;
+			}finally {
+				deliveryLck.unlock();
+			}
+		}
+	}
+
 	/**
 	 * Sends the provided payload. The send operation can block due to the flow control mechanism.
 	 * @param nodeId identifier of the destination node
@@ -446,31 +504,7 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, boolean receipt) throws InterruptedException, IOException {
-		SendRecord c = sr.get(nodeId);
-		boolean acquired = false;
-		if (c != null) {
-			c.sem.acquire();
-			acquired = true;
-		}
-
-		try{
-			stateLck.lock();
-			if(state != RUNNING) {
-				// release semaphore since a message won't be sent
-				if(acquired) c.sem.release();
-				// throws runtime closed exception if an attempt of sending a message
-				// is performed after invoking the close() method
-				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
-			}
-			// generates message identifier
-			MsgId msgId = createOutgoingMsgId();
-			// the identifier is only attached to the client message if a receipt was requested
-			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, receipt ? msgId : null));
-			algoQueue.put(aqm);
-			return msgId;
-		}finally {
-			stateLck.unlock();
-		}
+		return _send(nodeId, msg, receipt, null);
 	}
 
 	/**
@@ -481,7 +515,7 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	 * @throws IOException
 	 */
 	public void send(String nodeId, byte[] msg) throws InterruptedException, IOException {
-		send(nodeId,msg,false);
+		_send(nodeId, msg, false, null);
 	}
 
 	/**
@@ -498,33 +532,7 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	 * @throws IOException
 	 */
 	public MsgId send(String nodeId, byte[] msg, boolean receipt, long timeout) throws InterruptedException, IOException {
-		// If a send record exists attempts to acquire a permit.
-		// If the operation of acquiring the permit times out,
-		//	returns null.
-		SendRecord c = sr.get(nodeId);
-		boolean acquired = false;
-		if (c != null) {
-			if (!c.sem.tryAcquire(timeout, TimeUnit.MILLISECONDS))
-				return null;
-			else
-				acquired = true;
-		}
-
-		try{
-			stateLck.lock();
-			if(state != RUNNING) {
-				if(acquired) c.sem.release(); // release semaphore since a message won't be sent
-				throw new RuntimeException(new ClosedException("EOMiddleware is closed."));
-			}
-			// generates message identifier
-			MsgId msgId = createOutgoingMsgId();
-			// the identifier is only attached to the client message if a receipt was requested
-			AQMsg aqm = new AQMsg(nodeId, new ClientMsg(nodeId, msg, receipt ? msgId : null));
-			algoQueue.put(aqm);
-			return msgId;
-		}finally {
-			stateLck.unlock();
-		}
+		return _send(nodeId, msg, receipt, timeout);
 	}
 
 	/**
@@ -768,6 +776,10 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 		final double reqSlotsMultiplier = 1.5;
 		final double tokenMultiplier = 2;
 		final double acksMultiplier = 0.25;
+
+		public AlgoThread(String name) {
+			super(name);
+		}
 
 		public void run() {
 			try {
@@ -1076,6 +1088,11 @@ public class EOMiddleware implements DiscoverySubscriber, DiscoveryManager {
 	}
 
 	class ReaderThread extends Thread {
+
+		public ReaderThread(String name) {
+			super(name);
+		}
+
 		public void run() {
 			ByteBuffer b = ByteBuffer.allocate(MTUSize);
 			byte[] incomingData = new byte[MTUSize];
